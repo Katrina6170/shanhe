@@ -1,5 +1,10 @@
 (function(){
 "use strict";
+var doGovern; /* V4.16.1：跨段落共享 */
+var renderRebel; /* V4.16.1 跨段落共享 */
+var rebelAct; /* V4.16.1 跨段落共享 */
+var powerAct; /* V4.16.1 跨段落共享 */
+var renderPowers; /* V4.16.1 跨段落共享 */
 
 var $=function(id){return document.getElementById(id);};
 var NAMES=['王守备','李把总','张委员','刘道台','陈掌柜','赵主事','孙参将','周知府','吴道员','郑同知'];
@@ -2527,6 +2532,11 @@ gateRoles=function(){
 
 /* ---------- 更多“辛亥式”分支 ---------- */
 (function(){
+doGovern=_doGovernBase; /* V4.16.1：挂到主作用域，供后续版本包装 */
+powerAct=_powerAct_base; /* V4.16.1 共享 */
+rebelAct=_rebelAct_base; /* V4.16.1 共享 */
+renderPowers=_renderPowers_base; /* V4.16.1 共享 */
+renderRebel=_renderRebel_base; /* V4.16.1 共享 */
  var add={
   jiawu:{t:'把水师的银子先挪去练新军',d:'船已经沉了，人还能再练。',fac:['qing','local'],risk:1,
    cond:function(){return (s.rank>=3)||(s.track&&(s.track.army||0)>=1);},
@@ -2789,7 +2799,7 @@ function actSetOf(){
  return ACT_SETS.low;
 }
 function gAdd(k,v){ if(!s.natl) s.natl={稳定:62,经济:38,军事:45,财政:40,秩序:55,民心:50,国际:30,工业:15}; s.natl[k]=clamp((s.natl[k]||0)+v); }
-function doGovern(k){
+function _doGovernBase(k){
  if(!s||s.ap<=0){ flash('行动已用完'); return; }
  var r=Math.random();
  s.ap--;
@@ -2845,6 +2855,7 @@ function doGovern(k){
  try{render();}catch(e){}
 }
 
+
 /* ---------- 渲染：重写行动按钮 ---------- */
 function renderActs(){
  if(!s) return;
@@ -2894,7 +2905,7 @@ function ensureCards(){
   if(C&&C.parentNode) C.parentNode.insertBefore(w,C.nextSibling);
  }
 }
-function renderPowers(){
+function _renderPowers_base(){
  ensureCards(); initPowers();
  var h='<p class="small muted" style="margin:0 0 8px">列强各有实力与对你的态度。可交涉、借款、购舰，也可以翻脸。</p>';
  h+='<div class="vpw">';
@@ -2916,7 +2927,8 @@ function renderPowers(){
   b.onclick=function(){ powerAct(b.getAttribute('data-pw'),b.getAttribute('data-n')); };
  });
 }
-function powerAct(k,n){
+
+function _powerAct_base(k,n){
  if(!s) return;
  initPowers(); var o=s.__powers[n];
  if(k==='talk'){
@@ -2941,7 +2953,8 @@ function powerAct(k,n){
  }
  try{render();}catch(e){}
 }
-function renderRebel(){
+
+function _renderRebel_base(){
  ensureCards();
  var R=s.__rebel;
  if(!R){ $('rebelBody').innerHTML='<p class="small muted" style="margin:0">眼下还算太平。乱子往往在几个县里先冒头。</p>'; return; }
@@ -2954,7 +2967,8 @@ function renderRebel(){
   b.onclick=function(){ rebelAct(b.getAttribute('data-rb')); };
  });
 }
-function rebelAct(k){
+
+function _rebelAct_base(k){
  var R=s.__rebel; if(!R) return;
  if(k==='kill'){
   var win=Math.random()<0.55+((s.natl.军事||45)-40)/200;
@@ -2968,6 +2982,7 @@ function rebelAct(k){
  }
  s.__rebel=null; try{render();}catch(e){}
 }
+
 
 /* ---------- 年度：世界与人心的变化 ---------- */
 var _ytV30=window.__yearTick;
@@ -3743,7 +3758,7 @@ window.__declWarV4=function(p){
  window.__RENDER=function(){ try{ r0&&r0(); }catch(e){} setTimeout(run,30); };
 })();
 
-})();
+/* V4.16.1：主作用域闭合移至文件末尾，修复 chooseEvent 未定义 */
 
 /* ========== V4.1c 独立修正尾巴 ========== */
 (function(){
@@ -4205,6 +4220,7 @@ window.v4L = window.v4L || function(t){
  setInterval(tick,1500); tick();
 
 
+})(); /* V4.2.6 段落结束（V4.16.1 修正位置） */
 /* ================= V4.3：可分歧的战后历史与完整性修复 ================= */
 function ensureAltHistory(){
  if(!s)return;
@@ -4639,7 +4655,7 @@ resolvePostwarPath=function(){
 if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',installConstitutionEntry);else installConstitutionEntry();
 setTimeout(installConstitutionEntry,500);
 
-})();
+/* V4.16.1：V4.3 段落现处于主作用域 */
 
 
 
@@ -5788,3 +5804,4 @@ setTimeout(installConstitutionEntry,500);
  applySave=function(d){var r=oldApplySave.apply(this,arguments);try{ensure(s);}catch(e){}return r;};
  if(s)ensure(s);
 })();
+})(); /* 主作用域结束 */
