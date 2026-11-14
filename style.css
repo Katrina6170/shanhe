@@ -318,3 +318,42 @@ body{padding-top:86px}
 .constitution-choice{width:100%;text-align:left;margin:5px 0;white-space:normal;line-height:1.45}
 #btnConstitution{min-height:46px;padding:10px 16px;border-radius:24px;background:#8e382b;color:#fff;border:1px solid #6e2a20;font-weight:700}
 @media(max-width:600px){#btnConstitution{right:8px;bottom:10px;min-height:48px}.constitution-group{padding:7px}.constitution-choice{min-height:58px}}
+
+/* ===== V4.17 顶部时间栏 / V4.18 冷却标注 ===== */
+#hud .hud-clock{display:flex;align-items:center;gap:8px;flex-wrap:nowrap;white-space:nowrap}
+#hud .hud-date{font-size:14px;color:#2f2a22;font-weight:700;min-width:8.6em;font-variant-numeric:tabular-nums}
+#hud .hud-spd{font-size:11px;color:#4e6b4a;min-width:6.5em}
+#hud .hud-spd.paused{color:#a23a2c;font-weight:600}
+#hud .tc{display:inline-flex;border:1px solid #cdc4ae;border-radius:3px;overflow:hidden;background:#fdfaf2}
+#hud .tc button{border:0;border-left:1px solid #e0d8c4;background:transparent;font:inherit;font-size:12px;padding:4px 9px;color:#5f574a;cursor:pointer;min-height:28px;touch-action:manipulation}
+#hud .tc button:first-child{border-left:0}
+#hud .tc button.on{background:#8a3a2c;color:#fff;font-weight:600}
+#hud .tc button:hover:not(.on){background:#f3eee1}
+.cdnote{display:block;font-size:11px;line-height:1.35;color:#8c2b22;margin-top:2px;font-weight:400;white-space:normal}
+.btn.sm .cdnote{display:inline;margin:0 0 0 4px}
+button[data-cdoff]{opacity:.72;cursor:not-allowed}
+.cal-jobs{margin-top:9px;border-top:1px dashed var(--line);padding-top:7px}
+.cal-job{margin:4px 0 7px}
+.cal-job .bar{margin-top:3px}
+.cal-toast{position:fixed;left:50%;bottom:22px;transform:translateX(-50%) translateY(20px);background:#2f2a22;color:#fdfaf2;padding:9px 14px;font-size:13px;line-height:1.5;border-radius:4px;max-width:min(92vw,520px);z-index:140;opacity:0;pointer-events:none;transition:opacity .2s,transform .2s;box-shadow:0 4px 16px rgba(0,0,0,.2)}
+.cal-toast.on{opacity:1;transform:translateX(-50%) translateY(0)}
+.yr-report .yr-sec{margin:0 0 10px}
+.yr-report .yr-sec>b{display:block;margin-bottom:4px;color:#2f2a22}
+.yr-report .yr-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(130px,1fr));gap:2px 12px;font-size:13px}
+.yr-report ul{margin:0;padding-left:18px}
+.yr-report li{font-size:13px;margin:2px 0}
+.yr-report .up{color:#4e6b4a}.yr-report .down{color:#a23a2c}.yr-report .muted{color:#9a927f}
+@media (max-width:760px){
+ /* 手机：时间栏固定在顶部（body 有 overflow-x:hidden，sticky 不可靠），只保留日期、速度按钮与一行状态 */
+ #hud{position:fixed;top:0;left:0;right:0;z-index:40;gap:3px 8px;padding:5px 10px}
+ #hud .hud-l,#hud .hud-r,#hud .hud-spd{display:none}
+ #hud .hud-clock{order:-1;width:100%;justify-content:space-between;gap:8px}
+ #hud .hud-date{font-size:15px;min-width:0}
+ #hud .tc{flex:1;display:flex;max-width:260px}
+ #hud .tc button{flex:1;padding:6px 2px;font-size:13px;min-height:34px}
+ #hud .hud-m{width:100%;gap:10px;font-size:11px}
+}
+@media (max-width:420px){
+ #hud .hud-m span:nth-child(3){display:inline-flex}
+ #hud .hud-m span:nth-child(2){display:none}
+}

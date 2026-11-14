@@ -12,7 +12,221 @@ function randName(){ return NAMES[Math.floor(Math.random()*NAMES.length)]; }
 function clamp(n,lo,hi){lo=lo===undefined?0:lo;hi=hi===undefined?100:hi;return Math.max(lo,Math.min(hi,Math.round(n)));}
 function rnd(a,b){return a+Math.random()*(b-a);}
 function pick(a){return a[Math.floor(Math.random()*a.length)];}
-var EXP_MAX=100, AP_MAX=10;
+var EXP_MAX=100; /* V4.18：AP_MAX 已移除 */
+
+/* ================= V4.17：统一游戏时钟（日历核心） =================
+   全游戏唯一的时间来源。s.cal.ord 为“自 1840-01-01 起的第几天”（1840-01-01 = 0）。
+   年、月、日一律由序数推导；s.year 只作为旧系统的兼容镜像，由年末结算推进并与序数保持一致。 */
+var CAL_START_YEAR=1840, CAL_END_YEAR=1972;
+var CAL_MDAYS=[31,28,31,30,31,30,31,31,30,31,30,31];
+var _calYearStart={};
+function calIsLeap(y){ y=+y; return (y%4===0&&y%100!==0)||(y%400===0); }
+function calMonthDays(y,m){ return (m===2&&calIsLeap(y))?29:CAL_MDAYS[m-1]; }
+function calYearDays(y){ return calIsLeap(y)?366:365; }
+function calYearStart(y){
+ if(_calYearStart[y]!==undefined) return _calYearStart[y];
+ var n=0, yy;
+ if(y>=CAL_START_YEAR){ for(yy=CAL_START_YEAR;yy<y;yy++) n+=calYearDays(yy); }
+ else { for(yy=y;yy<CAL_START_YEAR;yy++) n-=calYearDays(yy); }
+ _calYearStart[y]=n; return n;
+}
+function calOrd(y,m,d){
+ y=+y; m=+m||1; d=+d||1;
+ var n=calYearStart(y);
+ for(var mm=1;mm<m;mm++) n+=calMonthDays(y,mm);
+ return n+(d-1);
+}
+function calFromOrd(n){
+ n=Math.floor(+n);
+ var y=CAL_START_YEAR+Math.floor(n/365.2425);
+ while(calYearStart(y)>n) y--;
+ while(calYearStart(y+1)<=n) y++;
+ var r=n-calYearStart(y), m=1;
+ while(r>=calMonthDays(y,m)){ r-=calMonthDays(y,m); m++; }
+ return {y:y,m:m,d:r+1,ord:n};
+}
+function calFmt(o){ return o?(o.y+'年'+o.m+'月'+o.d+'日'):'—'; }
+function calFmtOrd(n){ return calFmt(calFromOrd(n)); }
+var CAL_END_ORD=calOrd(CAL_END_YEAR,12,31);
+
+/* 时钟状态补齐与旧档迁移：没有日期的旧档迁移到“当年 1 月 1 日”。 */
+function calEnsure(st){
+ if(!st) return null;
+ var y=Math.round(+st.year||CAL_START_YEAR);
+ if(!st.cal||typeof st.cal!=='object'||typeof st.cal.ord!=='number'||!isFinite(st.cal.ord)){
+  st.cal={ord:calOrd(y,1,1),lastSettledYear:y-1,speedPref:1,finished:false};
+ }else if(!(CLOCK&&CLOCK.settling)&&calFromOrd(st.cal.ord).y!==y){
+  /* s.year 是旧系统读取的年份镜像；两者不一致时以 s.year 为准重新对齐到该年 1 月 1 日。 */
+  st.cal.ord=calOrd(y,1,1);
+ }
+ if(typeof st.cal.lastSettledYear!=='number') st.cal.lastSettledYear=y-1;
+ if(typeof st.cal.speedPref!=='number'||st.cal.speedPref<1||st.cal.speedPref>3) st.cal.speedPref=1;
+ st.cal.finished=!!st.cal.finished;
+ if(!st.cooldowns||typeof st.cooldowns!=='object'||Array.isArray(st.cooldowns)) st.cooldowns={};
+ if(!Array.isArray(st.jobs)) st.jobs=[];
+ if(typeof st.jobSeq!=='number') st.jobSeq=0;
+ if(Object.prototype.hasOwnProperty.call(st,'ap')) delete st.ap; /* V4.18：行动点已彻底移除 */
+ return st.cal;
+}
+function calTodayOrd(){ return (s&&s.cal&&typeof s.cal.ord==='number')?s.cal.ord:calOrd((s&&s.year)||CAL_START_YEAR,1,1); }
+function calToday(){ return calFromOrd(calTodayOrd()); }
+/* 事件日期是否已到（只比较日期，不关心年份是否相同）。 */
+function calDue(y,m,d){ if(!s) return false; if(!s.cal) return true; return calOrd(y,m||1,d||1)<=s.cal.ord; }
+
+/* ================= V4.18：行动冷却与持续行动（核心） =================
+   s.cooldowns = {行动键: 可再次执行的日期序数}
+   s.jobs = [{id,key,label,fx,start,end,data}]：持续行动，到期由每日处理自动结算且只结算一次。 */
+var JOB_FX={};
+/* V4.18 修复（V4.16.1 遗留）：gAdd / initPowers / rankTitleOf 原本只声明在 V3.0、V2.9 的嵌套段落里，
+   V4.6、V4.9 等外层段落直接调用会抛 ReferenceError（例如文官点「办公」的具体选项）。这里在主作用域做代理。 */
+function gAdd(k,v){ return window.__gAdd?window.__gAdd(k,v):undefined; }
+function initPowers(){ return window.__initPowers?window.__initPowers():undefined; }
+function rankTitleOf(){ return window.rankTitleOf?window.rankTitleOf():''; }  /* 持续行动完成时的效果：JOB_FX[名称](s, job) → 结果文字 */
+function actFactor(){
+ if(!s) return 1;
+ var ability=((+s.skill||0)-40)/400;             /* 能力越高越快 */
+ var rankF=Math.min(7,Math.max(0,+s.rank||0))*0.015; /* 职位越高，可调动的人手越多 */
+ var top=(s.isThrone||s.isLeader)?0.05:0;
+ var N=s.natl||{};
+ var chaos=(50-(((+N.稳定||50)+(+N.秩序||50))/2))/200; /* 政局越乱越慢 */
+ var f=1-ability-rankF-top+chaos;
+ return Math.max(0.7,Math.min(1.35,f));
+}
+function actDays(base){ return Math.max(1,Math.round((+base||1)*actFactor())); }
+function jobOf(key){
+ if(!s||!Array.isArray(s.jobs)) return null;
+ for(var i=0;i<s.jobs.length;i++){ if(s.jobs[i].key===key) return s.jobs[i]; }
+ return null;
+}
+/* 返回 null 表示可执行；否则 {kind:'job'|'cool', days, until, label} */
+function actBusy(key){
+ if(!s) return null;
+ calEnsure(s);
+ var today=s.cal.ord, j=jobOf(key);
+ if(j) return {kind:'job',days:Math.max(0,j.end-today),until:j.end,label:j.label};
+ var r=s.cooldowns[key];
+ if(typeof r==='number'&&r>today) return {kind:'cool',days:r-today,until:r};
+ return null;
+}
+function actBusyText(b){
+ if(!b) return '';
+ if(b.kind==='job') return '进行中 · 预计 '+calFmtOrd(b.until)+' 完成（还需 '+b.days+' 天）';
+ return '冷却中 · 还需 '+b.days+' 天（'+calFmtOrd(b.until)+' 可再行）';
+}
+/* 处理函数里的硬校验：界面禁用只是提示，真正的拦截在这里。 */
+function actGate(key,label){
+ if(!s) return false;
+ calEnsure(s);
+ if(s.dead){ calToast('人已不在，诸事皆休。'); return false; }
+ if(s.cal.finished){ calToast('历史已经走到 1972 年末，本局已经结算。'); return false; }
+ var b=actBusy(key);
+ if(b){ calToast((label?'「'+label+'」':'此事')+actBusyText(b)); return false; }
+ return true;
+}
+/* 开始冷却：返回实际冷却天数（已按能力/职位/政局修正）。 */
+function actCool(key,baseDays){
+ if(!s) return 0;
+ calEnsure(s);
+ var n=actDays(baseDays);
+ s.cooldowns[key]=s.cal.ord+n;
+ return n;
+}
+/* 开始持续行动：到期自动结算 fx；结算后可附加 cool 天的冷却。 */
+function jobStart(key,opt){
+ if(!s) return null;
+ calEnsure(s);
+ opt=opt||{};
+ var n=actDays(opt.days||30);
+ s.jobSeq=(s.jobSeq||0)+1;
+ var j={id:s.jobSeq,key:key,label:opt.label||key,fx:opt.fx||'',start:s.cal.ord,end:s.cal.ord+n,data:opt.data||{}};
+ s.jobs.push(j);
+ s.cooldowns[key]=j.end+Math.max(0,Math.round(opt.cool||0));
+ return j;
+}
+/* 每日：结算到期的持续行动。先移出队列再结算，保证只结算一次。 */
+function jobsProcess(){
+ if(!s||!Array.isArray(s.jobs)||!s.jobs.length) return 0;
+ var today=s.cal.ord, done=0;
+ for(var i=0;i<s.jobs.length;){
+  var j=s.jobs[i];
+  if(j.end<=today){
+   s.jobs.splice(i,1);
+   var text='';
+   try{ var f=JOB_FX[j.fx]; text=f?(f(s,j)||''):''; }catch(e){ text=''; }
+   ['skill','fame','power','trust'].forEach(function(k){ if(typeof s[k]==='number') s[k]=clamp(s[k]); });
+   try{ log('【完成】'+j.label+'（'+calFmtOrd(j.start)+'起，历时 '+(j.end-j.start)+' 天）'+(text?'：'+text:'。')); }catch(e){}
+   done++;
+  }else i++;
+ }
+ return done;
+}
+/* 历史事件日期：[月,日,是否为近似]。确定的用史实日期；只知年份/月份的取合理月份（第三项为 1）。 */
+var EVENT_DATES={
+ opium:[6,28],          /* 1840-06 英军封锁珠江口，战事正式展开 */
+ nanjing42:[8,29],      /* 1842-08-29 签订《南京条约》 */
+ taiping:[1,11],        /* 1851-01-11 金田起义 */
+ secondopium56:[10,8],  /* 1856-10-08 亚罗号事件 */
+ ziqiang:[1,20],        /* 1861-01-20 设立总理各国事务衙门 */
+ taipingfall64:[7,19],  /* 1864-07-19 天京陷落 */
+ saihai75:[5,3,1],      /* 1875 年春，左宗棠受命督办新疆军务（近似） */
+ sinoFrench84:[8,23],   /* 1884-08-23 马江海战 */
+ jiawu:[7,25],          /* 1894-07-25 丰岛海战 */
+ wuxu:[6,11],           /* 1898-06-11 《明定国是诏》 */
+ boxer:[6,21],          /* 1900-06-21 清廷宣战诏书 */
+ boxer01:[9,7],         /* 1901-09-07 《辛丑条约》 */
+ abolish_exam05:[9,2],  /* 1905-09-02 诏停科举 */
+ xinhai:[10,10],        /* 1911-10-10 武昌起义 */
+ minguo:[1,1],          /* 1912-01-01 中华民国成立 */
+ huguo15:[12,25],       /* 1915-12-25 云南宣布独立，护国战争爆发 */
+ warlord16:[6,6],       /* 1916-06-06 袁世凯去世 */
+ may4:[5,4],            /* 1919-05-04 */
+ beifa:[7,9],           /* 1926-07-09 北伐誓师 */
+ split:[4,12],          /* 1927-04-12 */
+ northeast28:[12,29],   /* 1928-12-29 东北易帜 */
+ '918':[9,18],          /* 1931-09-18 */
+ changzheng:[10,10],    /* 1934-10 中央红军开始长征 */
+ zunyi35:[1,15],        /* 1935-01-15 遵义会议 */
+ xian:[12,12],          /* 1936-12-12 */
+ q7:[7,7],              /* 1937-07-07 */
+ wuhan:[6,11,1],        /* 1938 年 6 月武汉会战外围作战展开（近似） */
+ baituan:[8,20],        /* 1940-08-20 */
+ henan42:[10,1,1],      /* 1942 年秋河南灾荒全面暴露（近似） */
+ '1945':[8,15],         /* 1945-08-15 日本宣布投降 */
+ civilwar46:[6,26],     /* 1946-06-26 中原突围，全面内战爆发 */
+ constitution47:[1,1],  /* 1947-01-01 公布《中华民国宪法》 */
+ campaign48:[9,12],     /* 1948-09-12 辽沈战役开始 */
+ founding49:[10,1],     /* 1949-10-01 */
+ korean50:[10,19],      /* 1950-10-19 志愿军入朝 */
+ plan53:[1,1],          /* 1953 年起实施第一个五年计划 */
+ transformation56:[12,1,1], /* 1956 年底社会主义改造基本完成（近似） */
+ greatleap58:[5,5],     /* 1958-05-05 八大二次会议 */
+ leap58:[8,29],         /* 1958-08-29 北戴河会议人民公社决议 */
+ cultural66:[5,16],     /* 1966-05-16 */
+ un71:[10,25]           /* 1971-10-25 联大第2758号决议 */
+};
+/* 战后替代路线事件沿用同年真实事件的日期，保证“分支”与“史实”在同一时间点出现。 */
+var ALT_EVENT_DATES={1949:[10,1],1950:[10,19],1953:[1,1],1956:[12,1],1966:[5,16],1971:[10,25]};
+function evDateOf(ev){
+ if(!ev) return [1,1];
+ if(ev.m&&ev.d) return [ev.m,ev.d];
+ var t=EVENT_DATES[ev.id];
+ return t?[t[0],t[1]]:[1,1];
+}
+function evDue(ev){ var d=evDateOf(ev); return calDue(ev.y,d[0],d[1]); }
+var ACT_HINT_TEXT='每项事务独立冷却，按游戏日计算；持续行动（出巡、巡查、操练、建设等）到期自动结算。暂停时冷却与行动一并停止。';
+var FAC_ACT_NAME={organize:'经营派系',contest:'竞争职位',reconcile:'协商和解',split:'推动分裂',succession:'权力更迭'};
+var FAC_ACT_DAYS={organize:30,contest:90,reconcile:60,split:180,succession:180};
+/* 轻提示：冷却拦截、自动暂停等都用它，不依赖存档卡是否可见。 */
+var _calToastTimer=null;
+function calToast(t){
+ try{
+  var el=document.getElementById('calToast');
+  if(!el){ el=document.createElement('div'); el.id='calToast'; el.className='cal-toast'; document.body.appendChild(el); }
+  el.textContent=t; el.classList.add('on');
+  if(_calToastTimer) clearTimeout(_calToastTimer);
+  _calToastTimer=setTimeout(function(){ try{ el.classList.remove('on'); }catch(e){} },2600);
+ }catch(e){}
+}
 
 /* ================= 阵营 ================= */
 var FAC={
@@ -533,7 +747,8 @@ var SAVE_KEY='shanhe_v15';
 function persist(){if(!s)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify({s:s,world:world}));}catch(e){}}
 window.__LOG=function(t){ try{ log(t); }catch(e){} };
 function log(t){
- s.logs.unshift('<div class="le"><b>'+s.year+'年</b>　'+t+'</div>');
+ var _d=(s.cal&&typeof s.cal.ord==='number')?calFmtOrd(s.cal.ord):(s.year+'年');
+ s.logs.unshift('<div class="le"><b>'+_d+'</b>　'+t+'</div>');
  s.logs=s.logs.slice(0,60);
  $('logs').innerHTML=s.logs.join('');
  persist();
@@ -669,7 +884,8 @@ function setRel(n,v){s.rel[n]=clamp(v);}
 
 /* ================= 互动 ================= */
 function openInteraction(name,kind){
- if(!s||s.ap<=0){flash('行动已用完');return;}
+ if(!s)return;
+ if(!actGate('meet:'+kind+':'+name,({visit:'拜访',learn:'请教',work:'共事'}[kind]||'')+name))return;
  var ps=visiblePeople();
  var p=null;
  for(var i=0;i<ps.length;i++){if(ps[i].n===name){p=ps[i];break;}}
@@ -749,27 +965,30 @@ var PREF={
 function pref(p,k){var m=PREF[p.st]||PREF['—'];return m[k]||1.0;}
 
 function doVisit(p,o){
+ if(!actGate('meet:visit:'+p.n,'拜访'+p.n))return;
  var d=Math.round(6*pref(p,o.key)+rnd(-5,7)+(getRel(p.n)>75?1:0));
  setRel(p.n,getRel(p.n)+d);
  addExp('trust',d>0?5:2);
- s.ap--;
+ actCool('meet:visit:'+p.n,15);
  showResult(p.n,'拜访',d,o.key==='direct'?'你的直率让对方有些意外。':'');
 }
 
 function doLearn(p,o){
+ if(!actGate('meet:learn:'+p.n,'请教'+p.n))return;
  var d=o.ok?Math.round(4+rnd(1,5)):Math.round(o.relDelta||-6);
  setRel(p.n,getRel(p.n)+d);
  if(o.ok){addExp('skill',8);addExp('power',2);}
  else{addExp('skill',2);}
- s.ap--;
+ actCool('meet:learn:'+p.n,30);
  showResult(p.n,'请教',d,o.run(s));
 }
 
 function doWork(p,o){
+ if(!actGate('meet:work:'+p.n,'共事'+p.n))return;
  var d=Math.round(6*pref(p,o.key)+rnd(-5,7));
  setRel(p.n,getRel(p.n)+d);
  addExp('fame',d>0?6:3);addExp('trust',d>0?4:2);
- s.ap--;
+ actCool('meet:work:'+p.n,30);
  showResult(p.n,'共事',d,'');
 }
 
@@ -800,7 +1019,7 @@ function showResult(name,kind,delta,extraText){
 
 /* ================= 行动 ================= */
 function doAction(a){
- if(!s||s.ap<=0)return;
+ if(!s||!actGate('act:'+a,'此事'))return;
  if(a==='train'){
   var ok=s.role==='soldier'||s.role==='officer';
   if(!ok){log('你没有军队身份，无法操练。');return;}
@@ -851,27 +1070,30 @@ function doAction(a){
   else{var p=pick(ps);setRel(p.n,getRel(p.n)+9);addExp('trust',4);addExp('power',2);log('你设法接近'+p.n+'。');}
  }
  ['skill','fame','power','trust'].forEach(function(k){s[k]=clamp(s[k]);});
- s.ap--;
+ actCool('act:'+a,15);
  persist();render();
 }
 
 /* ================= 上级与结社互动 ================= */
 function handleSup(kind){
+ var _sk='sup:'+kind;
+ if(!actGate(_sk,({visit:'拜访上级',gift:'给上级送礼',ask:'请示提拔'})[kind]))return;
  var u=supOf();
  if(kind==='visit'){
   var d=Math.round(rnd(4,9));
-  s.supRel=clamp(supRel()+d);addExp('trust',4);
+  s.supRel=clamp(supRel()+d);addExp('trust',4);actCool(_sk,20);
   log('你去'+u.t+'处坐了半日。'+u.t+'说了些场面上的话，也提点你两句。');
  }else if(kind==='gift'){
   if(s.cash<40){log('你拿不出 40 两的礼。');render();return;}
   s.cash-=40;
   var g=Math.round(rnd(6,12));
-  s.supRel=clamp(supRel()+g);addExp('trust',6);
+  s.supRel=clamp(supRel()+g);addExp('trust',6);actCool(_sk,30);
   log('你把 40 两的礼送进'+u.t+'府里，回话比往日客气。');
  }else if(kind==='ask'){
   var R=s.rank;
   if(R>=7){log('你已至顶层。');render();return;}
   var avg=(s.skill+s.fame+s.power+s.trust)/4;
+  actCool(_sk,90);
   var okAvg=avg>=GATE[R+1], okRel=supRel()>=45, okFee=s.cash>=(FEE[R+1]||0);
   if(!okAvg||!okRel||!okFee){
    var why=[];
@@ -892,10 +1114,12 @@ function handleSup(kind){
 
 function handleClub(kind){
  if(!s.clubJoined||!CLUBS[s.club])return;
+ var _ck='club:'+kind;
+ if(!actGate(_ck,({act:'会中办事',donate:'捐输',arm:'联络新军'})[kind]))return;
  var c=CLUBS[s.club];
  if(kind==='act'){
   s.clubRel=clamp(s.clubRel+Math.round(rnd(5,11)));
-  addExp('power',5);
+  addExp('power',5);actCool(_ck,30);
   var texts={
    tongmeng:['你参加了一次秘密会议，屋里二十几个人，桌上摊着地图。','你替同盟会送了一封信，穿过三道岗哨。','你在会里听孙中山讲三民主义，散会时有人在门口记名。'],
    guangfu:['光复会的人又办了一份小报，你帮着递送。','你在茶楼与几位同志接头，说的是“起义”两个字。'],
@@ -909,11 +1133,11 @@ function handleClub(kind){
  }else if(kind==='donate'){
   if(s.cash<60){log('你拿不出 60 两。');render();return;}
   s.cash-=60;s.fund+=30;
-  s.clubRel=clamp(s.clubRel+9);addExp('fame',4);
+  s.clubRel=clamp(s.clubRel+9);addExp('fame',4);actCool(_ck,60);
   log('你向'+c.name+'捐输 60 两，名册上添了你的名字。');
  }else if(kind==='arm'){
   if(s.cash<30){log('联络新军要花钱，你手头只有 '+s.cash+' 两。');render();return;}
-  s.cash-=30;
+  s.cash-=30;actCool(_ck,90);
   if(Math.random()<0.45){
    s.clubRel=clamp(s.clubRel+12);s.relDelta=(s.relDelta||0);
    s.alt=Math.min(99,s.alt+1);addExp('power',7);addExp('skill',4);
@@ -1005,7 +1229,7 @@ function render(){
   $('x'+cap(k)).textContent=Math.floor(e)+'/100';
  });
 
- $('tAp').textContent='行动 '+s.ap+'/'+AP_MAX;
+ $('tAp').textContent=(s.jobs&&s.jobs.length)?('进行中 '+s.jobs.length+' 项'):'各项独立冷却';
  $('rName').textContent=(window.rankTitleOf?window.rankTitleOf():F.ladder[rank]);
  var avg=(s.skill+s.fame+s.power+s.trust)/4;
  var next=rank>=7?null:GATE[rank+1];
@@ -1030,9 +1254,9 @@ function render(){
    '<span class="clq">'+(p.cl||'—')+'</span><span class="rel '+cls+'">'+r+'</span></div>'+
    '<div class="pdesc">'+p.d+'</div>'+
    '<div class="pbtns">'+
-   '<button class="btn sm" data-n="'+p.n+'" data-k="visit">拜访</button>'+
-   '<button class="btn sm" data-n="'+p.n+'" data-k="learn">请教</button>'+
-   '<button class="btn sm" data-n="'+p.n+'" data-k="work">共事</button>'+
+   '<button class="btn sm" data-n="'+p.n+'" data-k="visit" data-cd="meet:visit:'+p.n+'">拜访</button>'+
+   '<button class="btn sm" data-n="'+p.n+'" data-k="learn" data-cd="meet:learn:'+p.n+'">请教</button>'+
+   '<button class="btn sm" data-n="'+p.n+'" data-k="work" data-cd="meet:work:'+p.n+'">共事</button>'+
    '</div></div>';
  }).join('');
 
@@ -1042,9 +1266,6 @@ function render(){
  }).join('');
 
  renderMap();
- document.querySelectorAll('[data-act]').forEach(function(b){b.disabled=s.ap<=0;});
- $('btnAdvance').disabled=false;
- $('btnAdvance').textContent=s.ap>0?('结束本年（剩余 '+s.ap+' 次行动将作废）→'):'结束本年 →';
  $('logs').innerHTML=s.logs.join('');
 }
 
@@ -1085,9 +1306,9 @@ function renderSup(){
   '<span class="clq">直属上级</span><span class="rel '+cls+'">'+r+'</span></div>'+
   '<div class="pdesc">'+u.d+'</div>'+
   '<div class="pbtns">'+
-  '<button class="btn sm" data-sup="visit">拜访</button>'+
-  '<button class="btn sm" data-sup="gift">送礼（40两）</button>'+
-  '<button class="btn sm" data-sup="ask">请示提拔</button>'+
+  '<button class="btn sm" data-sup="visit" data-cd="sup:visit">拜访</button>'+
+  '<button class="btn sm" data-sup="gift" data-cd="sup:gift">送礼（40两）</button>'+
+  '<button class="btn sm" data-sup="ask" data-cd="sup:ask">请示提拔</button>'+
   '</div></div>';
 }
 
@@ -1104,9 +1325,9 @@ function renderClub(){
    '<div class="pdesc">'+c.desc+'</div>'+
    '<div class="small muted">年会费 '+c.fee+' 两 · 组织活动可提升资历与声望</div>'+
    '<div class="pbtns">'+
-   '<button class="btn sm" data-club="act">办事</button>'+
-   '<button class="btn sm" data-club="donate">捐输（60两）</button>'+
-   (['tongmeng','guangfu','xingzhong'].indexOf(s.club)>=0?'<button class="btn sm" data-club="arm">联络新军</button>':'')+
+   '<button class="btn sm" data-club="act" data-cd="club:act">办事</button>'+
+   '<button class="btn sm" data-club="donate" data-cd="club:donate">捐输（60两）</button>'+
+   (['tongmeng','guangfu','xingzhong'].indexOf(s.club)>=0?'<button class="btn sm" data-club="arm" data-cd="club:arm">联络新军</button>':'')+
    '</div></div>';
  }
  el.innerHTML=html;
@@ -1272,12 +1493,14 @@ function openRegion(reg,info){
  if(info.ctrl===s.faction||(s.pendingFaction&&info.ctrl===s.pendingFaction)){
   var b2=document.createElement('button');
   b2.className='choice';
-  b2.innerHTML='<b>整饬本地防务</b><div class="sub">加强该区域驻军，消耗一次行动。</div>';
+  var _rgKey='region:'+reg.n, _rgBusy=actBusy(_rgKey);
+  b2.innerHTML='<b>整饬本地防务</b><div class="sub">加强该区域驻军；此后约 '+actDays(60)+' 天内不能再整饬此地。</div>'+(_rgBusy?'<div class="chance" style="color:var(--red)">'+actBusyText(_rgBusy)+'</div>':'');
+  if(_rgBusy)b2.disabled=true;
   b2.onclick=function(){
-   if(s.ap<=0){flash('行动已用完');return;}
+   if(!actGate(_rgKey,'整饬'+reg.n+'防务'))return;
    info.str=Math.min(100,info.str+8);
    addExp('skill',4);addExp('power',3);
-   s.ap--;
+   actCool(_rgKey,60);
    log('你在'+reg.n+'整饬防务。');
    $('mask').classList.add('hidden');
    persist();render();
@@ -1295,15 +1518,15 @@ function openRegion(reg,info){
 /* ================= 事件 ================= */
 function maybeEvent(){
  var ev=null;
- for(var i=0;i<EVENTS.length;i++){if(EVENTS[i].y===s.year&&!s.evDone[EVENTS[i].id]){ev=EVENTS[i];break;}}
- if(!ev){$('curEvent').textContent=s.year+'年 · 局势相对平静。';return;}
- s.evDone[ev.id]=true;
+ for(var i=0;i<EVENTS.length;i++){if(EVENTS[i].y===s.year&&!s.evDone[EVENTS[i].id]&&evDue(EVENTS[i])){ev=EVENTS[i];break;}}
+ if(!ev){if(s.curEventYear!==s.year)$('curEvent').textContent=s.year+'年 · 局势相对平静。';return;}
+ s.evDone[ev.id]=true;s.curEventYear=s.year;
  $('curEvent').textContent=ev.t+'：'+ev.d;
  showEvent(ev);
 }
 
 function showEvent(ev){
- $('dlgTag').textContent='历史抉择 · '+ev.y+'年';
+ $('dlgTag').textContent='历史抉择 · '+((s&&s.cal&&ev.y===s.year)?calFmtOrd(s.cal.ord):(ev.y+'年'));
  $('dlgTitle').textContent=ev.t;$('dlgDesc').textContent=ev.d;
  var body=$('dlgBody');body.innerHTML='';
  if(ev.who&&ev.who.indexOf(s.faction)<0){
@@ -1339,14 +1562,14 @@ function chooseEvent(ev,o){
  var text='';try{text=o.run(s,win);}catch(e){text='局势变化超出预料。';}
  ['skill','fame','power','trust'].forEach(function(k){s[k]=clamp(s[k]);});
  log('【'+ev.t+'】'+text);
+ try{ if(!Array.isArray(s.histRec))s.histRec=[]; s.histRec.push({ord:calTodayOrd(),y:s.year,id:ev.id,t:ev.t,c:o.t}); if(s.histRec.length>200)s.histRec=s.histRec.slice(-200); }catch(e){}
  $('mask').classList.add('hidden');tryPromote();persist();render();
 }
 
 /* ================= 推进 ================= */
 function advance(){
  if(!s||s.dead)return;
- if(s.ap>0){if(s.ap>=4)log('这一年你只做了几件事，剩下的日子在等消息里过去了。');s.ap=0;}
- s.year++;s.ap=AP_MAX; try{if(window.__yearTick)window.__yearTick();}catch(e){}
+ s.year++; try{if(window.__yearTick)window.__yearTick();}catch(e){}
  if(s.pendingFaction&&s.year>=FAC[s.pendingFaction].min){
   var target=s.pendingFaction;s.faction=target;s.pendingFaction=null;s.rank=Math.min(s.rank,2);
   log('【'+s.year+'年】'+FAC[target].name+'正式成立。你以民间身份积累的资历得到部分认可，正式加入。');
@@ -1371,11 +1594,9 @@ function advance(){
  /* —— 公费随职位增长 —— */
  s.fund+=Math.round((s.rank+1)*rnd(6,14));
  if(s.year-s.birth>30)addExp('skill',2);
- render();maybeEvent();
- if(checkDeath()){s.dead=true;endGame('你走完了自己的一生。');return;}
- if(s.year>1972){endGame('年岁已高，故事停在这里。');return;}
+ render(); /* V4.17：历史事件改由时钟按日期触发，不再在年初一次性弹出 */
+ if(!s.dead&&checkDeath()){s.dead=true;s.deadYear=s.year;s.deathCause=s.deathCause||'年迈';endGame('你走完了自己的一生。');return;}
  persist();
- if(s&&!s.dead){try{localStorage.setItem(slotKey('auto'),JSON.stringify(packSave()));}catch(e){}}
 }
 
 function checkDeath(){
@@ -1397,7 +1618,7 @@ function endGame(reason){
   '<div><b>历史影响：</b>'+s.alt+'（'+lv+'）</div>'+
   '<div style="margin-top:6px;color:var(--muted)">'+(s.year-s.birth)+'岁，'+s.year+'年。</div></div>'+
   '<button class="choice" id="endRestart" style="text-align:center"><b>重新开始</b></button>';
- $('mask').classList.remove('hidden');$('btnAdvance').disabled=true;
+ $('mask').classList.remove('hidden');
  document.getElementById('endRestart').onclick=function(){
   $('mask').classList.add('hidden');s=null;world=null;
   $('game').classList.add('hidden');$('setup').classList.remove('hidden');
@@ -1452,7 +1673,7 @@ function init(){
   role:$('fRole').value,origin:$('fOrigin').value,
   skill:25,fame:10,power:5,trust:50,
   exp:{skill:0,fame:0,power:0,trust:0},breakthrough:{skill:0,fame:0,power:0,trust:0},
-  ap:AP_MAX,rank:0,alt:0,logs:[],rel:{},evDone:{},dead:false,
+  rank:0,alt:0,logs:[],rel:{},evDone:{},dead:false,
   institution:null,institutionYear:null,institutionHistory:[],
   constitution:{stateStructure:'unitary',executive:'parliamentary',politicalOrder:'multiparty',history:[]},
   cash:80,fund:20,supRel:50,club:'none',clubRel:50,clubSince:null,clubJoined:false,paidFee:{} };
@@ -1476,7 +1697,8 @@ function init(){
  else if(s.isThrone) log('你以'+s.origin+'出身登上大位，'+s.year+'年起，天下事由你定。');
  else if(s.isLeader) log('你以'+s.origin+'出身坐到本阵营的首席，'+s.year+'年起，方向由你拿主意。');
  else log('你以'+s.origin+'出身，成为'+roleName(s.role)+'，加入'+F.name+'。');
- render();maybeEvent();persist();
+ calEnsure(s);
+ render();persist();
 
  // 触发地图加载
  loadChinaMap(function(){
@@ -1499,7 +1721,6 @@ $('clubBox').addEventListener('click',function(e){
  var b=e.target.closest('[data-club]');if(b)handleClub(b.dataset.club);
 });
 $('btnPromote').onclick=function(){tryPromote();render();persist();};
-$('btnAdvance').onclick=advance;
 function slotKey(k){return 'shanhe_slot_'+k;}
 function packSave(){
  return {v:'1.7',ts:Date.now(),name:s.name,year:s.year,rank:s.rank,faction:s.faction,s:s,world:world};
@@ -1507,7 +1728,7 @@ function packSave(){
 function slotText(k){
  var raw=localStorage.getItem(slotKey(k));
  if(!raw)return '空';
- try{var d=JSON.parse(raw);return (d.name||'无名')+' · '+(d.year||'?')+'年 · '+(d.v||'');}
+ try{var d=JSON.parse(raw);return (d.name||'无名')+' · '+(d.date||((d.year||'?')+'年'))+' · '+(d.v||'');}
  catch(e){return '损坏';}
 }
 function refreshSlots(){
@@ -1635,16 +1856,17 @@ function isMil(){ return ['soldier','officer'].indexOf(s.role)>=0 || /军|兵|�
 function unitAct(kind){
  if(!s) return;
  if(!isMil()){log('你不是带兵的人。');render();return;}
- if(s.ap<=0){flash('行动已用完');return;}
+ if(!actGate('unit:'+kind,({rec:'招募',drill:'操练',fight:'开拔作战'})[kind]))return;
  var U=s.unit;
  if(kind==='rec'){
   var cost=30;
   if(s.cash<cost){log('银钱不够：招一个兵至少三十两。');render();return;}
-  s.cash-=cost;U.troops+=Math.round(rnd(6,10));U.mor=clamp(U.mor+2);s.ap--;
+  s.cash-=cost;U.troops+=Math.round(rnd(6,10));U.mor=clamp(U.mor+2);actCool('unit:rec',30);
   log('你在乡间挂了招兵的旗，来了 '+(U.troops)+' 个吃粮的人（共 '+U.troops+' 人）。');
  }else if(kind==='drill'){
-  U.mor=clamp(U.mor+Math.round(rnd(6,11)));U.sup=clamp(U.sup-Math.round(rnd(1,3)));s.skill+=1;s.ap--;
-  log('操场上一遍一遍列队、装弹、上刺刀。弟兄们骂娘，动作倒是整齐了。');
+  /* V4.18：操练改为持续行动，约一个月后结算士气 */
+  var _j=jobStart('unit:drill',{label:'部队操练',days:30,fx:'unitDrill'});
+  log('部队开始操练：列队、装弹、上刺刀，预计 '+calFmtOrd(_j.end)+' 结束。');
  }else if(kind==='fight'){
   var en=Math.round(rnd(20,60))+s.rank*6;
   var p=clamp(0.25+U.troops/90+U.mor/280+U.sup/280+s.skill/320+(s.clique?0.06:0)-en/220,0.08,0.92);
@@ -1653,7 +1875,7 @@ function unitAct(kind){
   U.troops=Math.max(0,U.troops-loss);
   U.mor=clamp(U.mor+(win?Math.round(rnd(4,9)):-Math.round(rnd(6,13))));
   U.sup=clamp(U.sup-Math.round(rnd(8,16)));
-  s.ap--;
+  actCool('unit:fight',60);
   if(win){
    addExp('skill',6);s.fame+=Math.round(rnd(2,5));s.trust=clamp(s.trust+Math.round(rnd(2,5)));s.alt+=1;
    log('【开拔】打了一仗。伤亡 '+loss+' 人，阵地拿下来了。'+(s.isThrone||s.isLeader?'捷报送进京，朝野都在看你的下一道旨意。':'上面对你有了印象。'));
@@ -1671,8 +1893,8 @@ function joinClique(i){
  var list=CLIQUES[s.faction]||[];
  if(!list[i])return;
  if(s.clique===list[i].n){log('你已经在「'+list[i].n+'」里了。');return;}
- if(s.ap<=0){flash('行动已用完');return;}
- s.clique=list[i].n;s.ap--;
+ if(!actGate('clique','改投派系'))return;
+ s.clique=list[i].n;actCool('clique',180);
  s.trust=clamp(s.trust+(i===0?3:1));
  log('你递了帖子，进了「'+list[i].n+'」。'+(list[i].d||''));
  persist();render();
@@ -1684,17 +1906,18 @@ function relOf(n){
  return s.rel2[n];
 }
 function relAct(name,kind){
- if(s.ap<=0){flash('行动已用完');return;}
+ var _rk='rel:'+kind+':'+name;
+ if(!actGate(_rk,({gift:'送礼',talk:'深谈',stand:'公开表态'})[kind]))return;
  var R=relOf(name);
  if(kind==='gift'){
   if(s.cash<40){log('拿不出四十两，客套话都说不响。');render();return;}
-  s.cash-=40;R.f=clamp(R.f+6);R.i=clamp(R.i+8);s.ap--;
+  s.cash-=40;R.f=clamp(R.f+6);R.i=clamp(R.i+8);actCool(_rk,30);
   log('你把四十两封成红纸包送到'+name+'府上，话没多说。对方记了这份人情。');
  }else if(kind==='talk'){
-  R.f=clamp(R.f+3);R.c=clamp(R.c+(s.faction===s.faction?2:2));s.ap--;addExp('power',3);
+  R.f=clamp(R.f+3);R.c=clamp(R.c+2);actCool(_rk,20);addExp('power',3);
   log('你陪'+name+'坐了半宿，从时局说到米价，话说得投机，也留了余地。');
  }else if(kind==='stand'){
-  R.c=clamp(R.c-9);R.f=clamp(R.f-3);s.fame+=2;s.alt+=1;s.ap--;
+  R.c=clamp(R.c-9);R.f=clamp(R.f-3);s.fame+=2;s.alt+=1;actCool(_rk,60);
   log('你在公开场合说了不中听的话，'+name+'脸色沉下去。你的名声传得更快，路也更窄。');
  }
  persist();render();
@@ -1771,9 +1994,9 @@ function renderExt(){
   $('unitBox').innerHTML='<p class="small" style="margin:0 0 6px">所部 '+U.troops+' 人 · 士气 '+Math.round(U.mor)+' · 补给 '+Math.round(U.sup)+'</p>'+
    bar('士气',U.mor)+bar('补给',U.sup)+
    '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
-   '<button class="btn sm" data-u="rec">招募（30 两）</button>'+
-   '<button class="btn sm" data-u="drill">操练</button>'+
-   '<button class="btn sm" data-u="fight">开拔作战</button></div>';
+   '<button class="btn sm" data-u="rec" data-cd="unit:rec">招募（30 两）</button>'+
+   '<button class="btn sm" data-u="drill" data-cd="unit:drill">操练（约30天）</button>'+
+   '<button class="btn sm" data-u="fight" data-cd="unit:fight">开拔作战</button></div>';
   [].forEach.call($('unitBox').querySelectorAll('[data-u]'),function(b){b.onclick=function(){unitAct(b.getAttribute('data-u'));};});
  }
 
@@ -1783,7 +2006,7 @@ function renderExt(){
   var h='<p class="small muted" style="margin:0 0 6px">当前：'+(s.clique?'<b>'+s.clique+'</b>':'未入任何派系')+'</p>';
   cl.forEach(function(c,i){
    h+='<div class="pcard"><div style="display:flex;justify-content:space-between;align-items:center"><b>'+c.n+'</b>'+
-      '<button class="btn sm" data-cl="'+i+'">'+(s.clique===c.n?'已在其中':'加入')+'</button></div>'+
+      '<button class="btn sm" data-cl="'+i+'"'+(s.clique===c.n?'':' data-cd="clique"')+'>'+(s.clique===c.n?'已在其中':'加入')+'</button></div>'+
       '<p class="small muted" style="margin:4px 0 0">'+c.d+'</p></div>';
   });
   $('cliqueBox').innerHTML=h;
@@ -1803,9 +2026,9 @@ function renderExt(){
    hr+='<div class="pcard"><div style="display:flex;justify-content:space-between;align-items:center"><b>'+p.n+'</b><span class="small muted">'+p.cl+'</span></div>'+
     '<p class="small muted" style="margin:4px 0">好感 '+Math.round(R.f)+' · 利益 '+Math.round(R.i)+' · 立场 '+Math.round(R.c)+'</p>'+
     '<div style="display:flex;gap:6px;flex-wrap:wrap">'+
-    '<button class="btn sm" data-rn="'+p.n+'" data-rk="gift">送礼</button>'+
-    '<button class="btn sm" data-rn="'+p.n+'" data-rk="talk">深谈</button>'+
-    '<button class="btn sm" data-rn="'+p.n+'" data-rk="stand">公开表态</button></div></div>';
+    '<button class="btn sm" data-rn="'+p.n+'" data-rk="gift" data-cd="rel:gift:'+p.n+'">送礼</button>'+
+    '<button class="btn sm" data-rn="'+p.n+'" data-rk="talk" data-cd="rel:talk:'+p.n+'">深谈</button>'+
+    '<button class="btn sm" data-rn="'+p.n+'" data-rk="stand" data-cd="rel:stand:'+p.n+'">公开表态</button></div></div>';
   });
   $('relBox').innerHTML=hr;
   [].forEach.call($('relBox').querySelectorAll('[data-rk]'),function(b){b.onclick=function(){relAct(b.getAttribute('data-rn'),b.getAttribute('data-rk'));};});
@@ -1839,7 +2062,7 @@ window.__yearTick=yearTick;
 var _renderBase=render;
 render=function(){ _renderBase(); try{renderExt();}catch(e){} };
 var _advBase=advance;
-advance=function(){ _advBase(); try{renderExt();}catch(e){} }; setTimeout(function(){var b=document.getElementById('btnAdvance'); if(b) b.onclick=function(){advance();};},0);
+advance=function(){ _advBase(); try{renderExt();}catch(e){} };
 var _doBase=doAction;
 doAction=function(a){ _doBase(a); };
 
@@ -2220,7 +2443,7 @@ var TIPS={
  '谋生':'副业挣钱。文官、商人最拿手。',
  '打点':'给上官送钱送礼，直接抬上司信任（好感）；银钱不够做不了。',
  '添置':'买田、买宅、买照相器物。花银钱换声望。',
- '输捐':'报效公费，抬营务，换明年多几次行动。',
+ '输捐':'报效公费，抬营务，账房会记你一功。',
  '联络新军':'去新军营里串门、递话、摸底。成了涨政治影响与声望；被查出来会掉信任，甚至被抓。',
  '拜把子':'换帖结义。成了关系更硬，出事有人替你说话；性格不合会被拒。',
  '请示提拔':'向上级开口要资格：先看四项属性均值，再看上级好感，最后看打点银钱。',
@@ -2799,10 +3022,11 @@ function actSetOf(){
  return ACT_SETS.low;
 }
 function gAdd(k,v){ if(!s.natl) s.natl={稳定:62,经济:38,军事:45,财政:40,秩序:55,民心:50,国际:30,工业:15}; s.natl[k]=clamp((s.natl[k]||0)+v); }
+window.__gAdd=gAdd; window.__initPowers=initPowers; /* V4.18：导出给主作用域代理（见文件顶部） */
 function _doGovernBase(k){
- if(!s||s.ap<=0){ flash('行动已用完'); return; }
+ if(!s||!actGate('gov:'+k,'此事')) return;
  var r=Math.random();
- s.ap--;
+ actCool('gov:'+k,15);
  if(k==='memorial'){
   gAdd('秩序',Math.round(rnd(1,3)));gAdd('财政',Math.round(rnd(0,2)));s.power+=Math.round(rnd(1,4));addExp('power',3);
   log('【批折】你连夜看了'+Math.round(rnd(12,40))+'本折子，'+(r<0.8?'两江的漕粮挪了挪，没出大岔子。':'有人在折子里夹带私货，你把名字记下了。'));
@@ -2868,7 +3092,7 @@ function renderActs(){
  box.innerHTML='';
  set.forEach(function(it,i){
   var b=document.createElement('button');
-  b.className='act'; b.setAttribute('data-act',it.k);
+  b.className='act'; b.setAttribute('data-act',it.k); b.setAttribute('data-cd','gov:'+it.k);
   var sp=document.createElement('span'); sp.className='tips'; sp.setAttribute('data-tip',it.d);
   sp.innerHTML='<b>'+it.t+'</b><span>'+it.d.slice(0,10)+'</span>';
   b.appendChild(sp);
@@ -2915,10 +3139,10 @@ function _renderPowers_base(){
    '<div class="vpwbar"><i style="width:'+Math.round(o.p)+'%"></i></div>'+
    '<span class="small">'+Math.round(o.p)+' 实力 · '+Math.round(o.r)+' 关系'+(o.war?' · <b style="color:var(--red)">交兵</b>':'')+'</span>'+
    '<div style="display:flex;gap:4px;flex-wrap:wrap;margin-top:4px">'+
-   '<button class="btn sm" data-pw="talk" data-n="'+P.n+'">交涉</button>'+
-   '<button class="btn sm" data-pw="loan" data-n="'+P.n+'">借款</button>'+
-   '<button class="btn sm" data-pw="buy" data-n="'+P.n+'">购舰</button>'+
-   '<button class="btn sm" data-pw="war" data-n="'+P.n+'">'+(o.war?'和谈':'宣战')+'</button>'+
+   '<button class="btn sm" data-pw="talk" data-n="'+P.n+'" data-cd="pw:talk:'+P.n+'">交涉</button>'+
+   '<button class="btn sm" data-pw="loan" data-n="'+P.n+'" data-cd="pw:loan:'+P.n+'">借款</button>'+
+   '<button class="btn sm" data-pw="buy" data-n="'+P.n+'" data-cd="pw:buy:'+P.n+'">购舰</button>'+
+   '<button class="btn sm" data-pw="war" data-n="'+P.n+'" data-cd="pw:war:'+P.n+'">'+(o.war?'和谈':'宣战')+'</button>'+
    '</div></div>';
  });
  h+='</div>';
@@ -2932,16 +3156,17 @@ function _powerAct_base(k,n){
  if(!s) return;
  initPowers(); var o=s.__powers[n];
  if(k==='talk'){
-  var d=Math.round(rnd(3,9)); o.r=clamp(o.r+d);
+  var d=Math.round(rnd(3,9)); o.r=clamp(o.r+d); actCool('pw:talk:'+n,30);
   log('【外事】你与'+n+'的使节谈了两轮，关系 +'+d+'。');
  } else if(k==='loan'){
-  var m=Math.round(rnd(300,1200)); s.cash+=m; o.r=clamp(o.r+6); gAdd('财政',3); gAdd('民心',-2);
+  var m=Math.round(rnd(300,1200)); s.cash+=m; o.r=clamp(o.r+6); gAdd('财政',3); gAdd('民心',-2); actCool('pw:loan:'+n,180);
   log('【外事】向'+n+'借了 '+m+' 两。银子到账，账本上的窟窿换了个名字。');
  } else if(k==='buy'){
   if(s.cash<400){ flash('银子不够（需 400 两）'); return; }
-  s.cash-=400; gAdd('军事',Math.round(rnd(2,5))); o.r=clamp(o.r+2);
+  s.cash-=400; gAdd('军事',Math.round(rnd(2,5))); o.r=clamp(o.r+2); actCool('pw:buy:'+n,90);
   log('【外事】从'+n+'购入枪炮一批，军力上涨。');
  } else if(k==='war'){
+  actCool('pw:war:'+n,60);
   if(!o.war){
    o.war=true;o.r=clamp(o.r-40);
    log('【开战】你对'+n+'宣战。朝野震动，'+(s.rank>=6?'无人能劝住你。':'有大臣跪在阶下不肯起。'));
@@ -2993,16 +3218,7 @@ window.__yearTick=function(){
   if(s&&s.__rebel && Math.random()<0.5){ s.__rebel.arm=Math.round(s.__rebel.arm*1.2); }
  }catch(e){}
  try{ renderPowers(); renderRebel(); }catch(e){}
- (function waitClose(n){
-  setTimeout(function(){
-   try{
-    var m=document.getElementById('mask');
-    if(!s) return;
-    if(m.classList.contains('hidden')) yearReview();
-    else if(n>0) waitClose(n-1);
-   }catch(e){}
-  },500);
- })(20);
+ /* V4.17：旧版“年终回顾”弹窗改由时钟的年度报告统一展示，避免重复弹出 */
 };
 
 /* ---------- 年终回顾：改成“这一年你干了什么” ---------- */
@@ -3034,10 +3250,7 @@ render=function(){
   var hr=document.getElementById('hRole');
   if(hr) hr.textContent=(s.isThrone?('皇帝 · '+s.origin):(s.isLeader?('首席 · '+s.origin):(roleName(s.role)+' · '+s.origin)));
   if(ttl) ttl.textContent = s.isThrone?'朝政':(s.isLeader?'朝议':(s.rank>=3?'公务':'生计'));
-  if(hint) hint.textContent = s.isThrone?'每年 10 次处置。批折、用人、调兵、开库、出巡，都会直接改动国势。'
-    :(s.isLeader?'每年 10 次朝议。你定的方略，会被底下的人解释成他们的样子。'
-    :(s.rank>=3?'每年 10 次公务。办公、交际、递折、巡查，都是一寸一寸往上爬。'
-    :'每年 10 次生计。做工、打听、结交、操练，先活下来再说。'));
+  if(hint) hint.textContent = ACT_HINT_TEXT;
  }catch(e){}
  try{ renderPowers(); }catch(e){}
  try{ renderRebel(); }catch(e){}
@@ -3126,12 +3339,12 @@ function openCountry(n){
   if(own!=='qing'&&s.year>=1840){
    var b=document.createElement('button');
    b.className='choice';
-   b.innerHTML='<b>调兵攻取</b><div class="sub">耗一次行动与 60 两军费；军事越强越容易得手。</div>';
+   b.innerHTML='<b>调兵攻取</b><div class="sub">60 两军费；军事越强越容易得手。之后约 '+actDays(90)+' 天不能再次用兵。</div>';
    b.onclick=function(){
     closeDlg();
-    if(s.ap<=0){ log('行动已用完。'); render(); return; }
+    if(!actGate('country:attack','调兵攻取')){ render(); return; }
     if((s.cash||0)<60){ log('库里拿不出这 60 两开拔钱。'); render(); return; }
-    s.ap-=1; s.cash-=60;
+    actCool('country:attack',90); s.cash-=60;
     var odds=Math.max(8,Math.min(72, 18 + (s.skill||0)*0.35 + ((world&&world.guo&&world.guo.mil)||40)*0.35 + (s.power||0)*0.12));
     var win=Math.random()*100<odds;
     world.owner=world.owner||{};
@@ -3152,11 +3365,11 @@ function openCountry(n){
   if(own==='qing'){
    var b2=document.createElement('button');
    b2.className='choice';
-   b2.innerHTML='<b>设治抚民</b><div class="sub">安抚新附之地，耗一次行动，涨民心。</div>';
+   b2.innerHTML='<b>设治抚民</b><div class="sub">安抚新附之地，涨民心。同一地方约 '+actDays(60)+' 天办一次。</div>';
    b2.onclick=function(){
     closeDlg();
-    if(s.ap<=0){ log('行动已用完。'); render(); return; }
-    s.ap-=1; s.fame=clamp(s.fame+4);
+    if(!actGate('country:settle:'+n,'设治抚民')){ render(); return; }
+    actCool('country:settle:'+n,60); s.fame=clamp(s.fame+4);
     if(world.guo){ world.guo.min=clamp((world.guo.min||50)+3); }
     vlog('【设治】'+n+'设了县治，老百姓把旗子插在了自家门口。');
     render();
@@ -3272,17 +3485,17 @@ window.__declWar=function(p){ var w=__W2(); w.war={p:p,t:1,score:0}; __LOG2('【
   var info=document.createElement('p');
   info.className='small muted';
   info.style.margin='2px 0 8px';
-  info.textContent='该国军力约 '+(POW_MIL[power]||50)+'，我方军事 '+myMil+'，我方行动 '+(s.ap||0)+' 次。';
+  info.textContent='该国军力约 '+(POW_MIL[power]||50)+'，我方军事 '+myMil+'。';
   body.insertBefore(info, body.firstChild);
 
   if(own!=='qing'){
    var attack=document.createElement('button');
    attack.className='choice';
-   attack.innerHTML='<b>兴兵侵入</b><div class="sub">耗一次行动，胜了就换旗。成功率约 '+Math.max(10,Math.min(70, Math.round(16+(s.skill||0)*0.3+myMil*0.4)))+'%。</div>';
+   attack.innerHTML='<b>兴兵侵入</b><div class="sub">胜了就换旗；之后约 '+actDays(90)+' 天不能再次用兵。成功率约 '+Math.max(10,Math.min(70, Math.round(16+(s.skill||0)*0.3+myMil*0.4)))+'%。</div>';
    attack.onclick=function(){
     closeDlg();
-    if(s.ap<=0){ __LOG2('行动已用完。'); __RN2(); return; }
-    s.ap-=1;
+    if(!actGate('country:attack','兴兵侵入')){ __RN2(); return; }
+    actCool('country:attack',90);
     var odds=Math.max(10,Math.min(70, 16+(s.skill||0)*0.3+myMil*0.4));
     var w=__W2(); w.owner=w.owner||{};
     if(Math.random()*100<odds){
@@ -3351,6 +3564,7 @@ window.__renderCompare=renderCompare;
   if(!b) return;
   var key=MAP[b.getAttribute('data-n')]||null;
   if(!key) return;
+  if(actBusy('pw:war:'+b.getAttribute('data-n'))) return; /* V4.18：宣战/和谈冷却中 */
   var w=__W2();
   if(w.war&&w.war.p===key) return;
   setTimeout(function(){ window.__declWar(key); },30);
@@ -3397,7 +3611,7 @@ var TALENTS=[
 function v4talents(){ var w=V4W(); if(!w.talents) w.talents=[]; return w.talents; }
 
 function v4appoint(){
- var s=V4S(); if(!s||s.ap<=0){ V4L('行动已用完。'); return; }
+ var s=V4S(); if(!s||!actGate('gov:appoint','用人')) return;
  var w=V4W();
  if(!w.pool||!w.pool.length) w.pool=TALENTS.slice();
  var picks=[]; var pool=w.pool.slice();
@@ -3415,7 +3629,8 @@ function v4appoint(){
   b.innerHTML='<b>'+p.n+'</b><div class="sub">'+p.d+'</div>'+
     '<div class="small" style="margin-top:4px">才具：'+grade+'（'+p.s+'）　操守：'+(p.bad>=2?'可疑':(p.bad===1?'一般':'可靠'))+'</div>';
   b.onclick=function(){
-   s.ap-=1;
+   if(!actGate('gov:appoint','用人')){ mask.classList.add('hidden'); return; }
+   actCool('gov:appoint',60);
    v4talents().push({n:p.n,s:p.s,bad:p.bad,d:p.d,rel:45,rank:s.rank||0});
    s.alt+=1; s.trust=V4C(s.trust+Math.round(p.s/30),0,100);
    if(p.bad>=2){ s.cash=Math.max(0,s.cash-Math.round(p.s*1.5));
@@ -3432,7 +3647,7 @@ function v4appoint(){
 }
 
 function v4mobilize(){
- var s=V4S(); if(!s||s.ap<=0){ V4L('行动已用完。'); return; }
+ var s=V4S(); if(!s||!actGate('gov:mobilize','调兵')) return;
  var w=V4W(); var g=w.guo=w.guo||{};
  var mask=document.getElementById('mask'), body=document.getElementById('dlgBody');
  document.getElementById('dlgTag').textContent='调兵';
@@ -3447,7 +3662,7 @@ function v4mobilize(){
  opts.forEach(function(o){
   var b=document.createElement('button'); b.className='choice';
   b.innerHTML='<b>'+o.t+'</b><div class="sub">'+o.d+'</div>';
-  b.onclick=function(){ s.ap-=1; o.run(); mask.classList.add('hidden'); V4R(); };
+  b.onclick=function(){ if(!actGate('gov:mobilize','调兵')){ mask.classList.add('hidden'); return; } actCool('gov:mobilize',45); o.run(); mask.classList.add('hidden'); V4R(); };
   body.appendChild(b);
  });
  var c=document.createElement('button'); c.className='choice'; c.innerHTML='<b>收起</b>';
@@ -3553,6 +3768,7 @@ function v4warPanel(){
  if(!war.my) war.my={n:Math.max(10,Math.round(((w.guo&&w.guo.mil)||45)*0.8+((s&&s.skill)||0)*0.6)),mor:72,sup:70};
  if(!war.en) war.en={n:({japan:44,russia:76,britain:88,france:62,usa:58,dutch:40,siam:30,nepal:18,afghan:20,mongolia:12})[war.p]||50,mor:72};
  if(war.day===undefined) war.day=0;
+ if(typeof war.startOrd==='number'&&!war.done) war.day=Math.max(0,calTodayOrd()-war.startOrd);
  var my=war.my, en=war.en;
  var rows=
   '<div class="pwr"><b>我军</b><span class="pb"><i style="width:'+Math.min(100,my.n)+'%;background:#a23a2c"></i></span><em>'+Math.round(my.n)+'</em></div>'+
@@ -3571,10 +3787,10 @@ function v4warPanel(){
   (war.place?'<p class="small muted" style="margin:2px 0 6px">战场：'+war.place+'</p>':'')+
   rows+
   '<div style="display:flex;gap:6px;flex-wrap:wrap;margin:9px 0 6px">'+
-   '<button class="btn sm" data-wc="attack">进攻</button>'+
-   '<button class="btn sm" data-wc="hold">固守</button>'+
-   '<button class="btn sm" data-wc="flank">包抄</button>'+
-   '<button class="btn sm" data-wc="supply">调粮</button>'+
+   '<button class="btn sm" data-wc="attack" data-cd="war:cmd">进攻</button>'+
+   '<button class="btn sm" data-wc="hold" data-cd="war:cmd">固守</button>'+
+   '<button class="btn sm" data-wc="flank" data-cd="war:cmd">包抄</button>'+
+   '<button class="btn sm" data-wc="supply" data-cd="war:cmd">调粮</button>'+
    '<button class="btn sm" data-wc="retreat">撤退</button>'+
   '</div>'+
   '<div class="small muted" style="max-height:110px;overflow:auto">'+(war.logs||[]).slice(-5).map(function(x){return '· '+x;}).join('<br>')+'</div>';
@@ -3585,8 +3801,12 @@ function v4warPanel(){
 
 function v4battle(cmd){
  var w=V4W(), s=V4S(); var war=w&&w.war; if(!war||war.done) return;
+ if(!actGate('war:cmd','前线指挥')) return;
  var my=war.my, en=war.en;
- war.day+=Math.round(12+Math.random()*10);
+ /* V4.18：每道军令需要约两周落实；交兵天数一律按游戏日历计算 */
+ actCool('war:cmd',Math.round(12+Math.random()*10));
+ if(typeof war.startOrd!=='number') war.startOrd=calTodayOrd()-(war.day||0);
+ war.day=Math.max(0,calTodayOrd()-war.startOrd);
  var msg=[];
  if(cmd==='attack'){
   var kill=Math.round(my.n*0.10*(my.mor/70)+Math.random()*4);
@@ -3628,7 +3848,7 @@ function v4battle(cmd){
 /* 宣战入口：改成按天计的战事 */
 window.__declWarV4=function(p){
  var w=V4W();
- w.war={p:p,day:0,logs:['朝廷下旨，与'+V4CN(p)+'开战。'],place:'边境'};
+ w.war={p:p,day:0,startOrd:calTodayOrd(),logs:['朝廷下旨，与'+V4CN(p)+'开战。'],place:'边境'};
  v4warPanel(); V4RM(); V4R();
 };
 
@@ -3726,11 +3946,10 @@ window.__declWarV4=function(p){
   set('hudRole', role+' · '+(s.tierName||''));
   var FACN={qing:'清',beiyang:'北洋',kmt:'国民党',cpc:'中共',local:'地方',civil:'民间'};
   var age=(s.age!==undefined&&s.age!==null)?s.age:(s.birth?(s.year-s.birth):'—');
-  set('hudYear', (s.year||'—')+'年');
+  set('hudYear', s.cal?calFmtOrd(s.cal.ord):((s.year||'—')+'年'));
   set('hudAge', age+'岁');
   set('hudFac', FACN[s.faction]||s.faction||'—');
   set('hudCash', Math.round(s.cash||0)+' 两');
-  set('hudAp', (s.ap!==undefined?s.ap:'—')+' 次');
   set('hudPlace', s.region||s.place||'—');
  }
  function run(){
@@ -3740,7 +3959,7 @@ window.__declWarV4=function(p){
   if(nav){var nd=started?'flex':'none';if(nav.style.display!==nd)nav.style.display=nd;}
   var hudEl=document.getElementById('hud');
   if(hudEl){var hd=started?'':'none';if(hudEl.style.display!==hd)hudEl.style.display=hd;}
-  document.body.style.paddingTop=started?'':'0';
+  if(!started)document.body.style.paddingTop='0'; /* V4.17：开局后由时间栏布局函数统一计算 */
   if(!started){
    cards().forEach(function(c){ c.style.display=''; });
    var map=document.querySelector('.main>div:nth-child(2)'); if(map) map.style.display='none';
@@ -3969,7 +4188,7 @@ window.v4L = window.v4L || function(t){
    '<p class="small" style="color:#5c5346;margin:2px 0 6px">'+INTRO[hash(name)%INTRO.length]+'</p>'+
    '<p class="small muted" id="v42rel" style="margin:0 0 10px"></p>'+
    '<div style="display:grid;gap:8px">'+
-    '<button class="btn" data-m="chat">坐下聊两句（不耗行动，可聊 3 次）</button>'+
+    '<button class="btn" data-m="chat">坐下聊两句（此次拜会可聊 3 次）</button>'+
     '<button class="btn" data-m="gift">送点东西（20 两，好感 +8）</button>'+
     '<button class="btn" data-m="out">告辞</button>'+
    '</div><div id="v42say" class="small" style="margin-top:10px;color:#5c5346"></div></div>';
@@ -3999,6 +4218,7 @@ window.v4L = window.v4L || function(t){
  document.addEventListener('click',function(e){
   var b=e.target.closest('[data-act="befriend"]');
   if(!b) return;
+  if(actBusy('gov:befriend')) return; /* V4.18：结交冷却中不再弹出拜会 */
   setTimeout(function(){ openMeet(who()); },240);
  },true);
 
@@ -4344,6 +4564,7 @@ maybeEvent=function(){
  ensureAltHistory();
  var path=world.altPath||s.altHistory.path;
  if(s.year===1949&&path&&path!=='cpc_victory'){
+  if(!calDue(1949,ALT_EVENT_DATES[1949][0],ALT_EVENT_DATES[1949][1]))return; /* V4.17：按日期触发 */
   var id='alt1949_'+path;if(s.evDone[id])return;
   s.evDone[id]=true;
   var ev;
@@ -4385,6 +4606,7 @@ maybeEvent=function(){
    ]}
   };
   var a=altEvents[s.year];
+  if(a&&ALT_EVENT_DATES[s.year]&&!calDue(s.year,ALT_EVENT_DATES[s.year][0],ALT_EVENT_DATES[s.year][1]))return; /* V4.17：未到日期 */
   if(a){var key='alt_event_'+s.year;if(s.evDone[key])return;s.evDone[key]=true;var ev2={id:key,y:s.year,t:a.t,d:a.d,who:['kmt','cpc','civil','local'],opts:a.opts};$('curEvent').textContent=ev2.t+'：'+ev2.d;showEvent(ev2);return;}
  }
  _maybeEventV43();
@@ -4738,7 +4960,7 @@ setTimeout(installConstitutionEntry,500);
   });
   if(V46Official(x)&&V46Rank(x)>=5){
    var propose=document.createElement('button');propose.className='btn primary';propose.textContent='向政府递交宪制改革建议';
-   propose.onclick=function(){if((x.ap||0)<=0){V46Note('行动已用完，无法递交建议。');return;}x.ap--;x.constitution.proposals.push({year:x.year,kind:'constitutional_reform',by:x.role,rank:x.rank});x.constitution.proposals=x.constitution.proposals.slice(-20);x.power=V46Clamp((x.power||0)+3);V46Note('【修宪建议】你的改革建议已递交，是否采纳取决于政府授权与政治支持。');mask.classList.add('hidden');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();};body.appendChild(propose);
+   propose.setAttribute('data-cd','cons:propose');propose.onclick=function(){if(!actGate('cons:propose','递交宪制改革建议'))return;actCool('cons:propose',180);x.constitution.proposals.push({year:x.year,kind:'constitutional_reform',by:x.role,rank:x.rank});x.constitution.proposals=x.constitution.proposals.slice(-20);x.power=V46Clamp((x.power||0)+3);V46Note('【修宪建议】你的改革建议已递交，是否采纳取决于政府授权与政治支持。');mask.classList.add('hidden');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();};body.appendChild(propose);
   }
   var close=document.createElement('button');close.className='btn';close.textContent='关闭';close.onclick=function(){mask.classList.add('hidden');};body.appendChild(close);mask.classList.remove('hidden');
  };
@@ -4777,7 +4999,7 @@ setTimeout(installConstitutionEntry,500);
   if((k==='loan'||k==='buy')&&!V46Leader(x)){V46Note('【权限不足】国家借外债与军购必须由最高决策者批准。');return;}
   if(k==='talk'&&!V46CanEnvoy(x)){V46Note('【权限不足】你没有外交或商业交涉身份。');return;}
   if(k==='talk'&&V46Merchant(x)){
-   initPowers();var p=x.__powers[n];if(!p)return;var gain=Math.round(rnd(2,6));p.r=V46Clamp(p.r+gain);x.cash=(x.cash||0)+Math.round(rnd(5,18));x.fame=V46Clamp((x.fame||0)+1);V46Note('【商贸】你与'+n+'的商行谈成一笔生意，商业关系改善，个人收入增加；这不代表国家外交立场改变。');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();return;
+   initPowers();var p=x.__powers[n];if(!p)return;actCool('pw:talk:'+n,30);var gain=Math.round(rnd(2,6));p.r=V46Clamp(p.r+gain);x.cash=(x.cash||0)+Math.round(rnd(5,18));x.fame=V46Clamp((x.fame||0)+1);V46Note('【商贸】你与'+n+'的商行谈成一笔生意，商业关系改善，个人收入增加；这不代表国家外交立场改变。');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();return;
   }
   if(k==='talk'&&!V46Leader(x)&&!(V46Official(x)&&V46Rank(x)>=5)){V46Note('【权限不足】只有高级文官或国家领袖可以奉命进行外交交涉。');return;}
   oldPowerAct(k,n);
@@ -4951,16 +5173,16 @@ setTimeout(installConstitutionEntry,500);
   if(k==='authorize_kill'){
    if(!isLeader(x)){note('【权限不足】只有国家最高决策者可以签发平乱军令。');return;}
    if(!x.__rebel){note('当前没有需要处理的内乱。');return;}
-   if((x.ap||0)<=0){note('行动已用完，无法签发军令。');return;}
-   x.ap--;
+   if(!actGate('order:rebel','签发平乱军令'))return;
+   actCool('order:rebel',30);
    x.authorizedOrders=x.authorizedOrders.filter(function(o){return o&&o.type!=='rebel_suppression';});
    x.authorizedOrders.push({type:'rebel_suppression',year:x.year,expires:x.year,issuedBy:x.name||'国家最高决策者'});
    note('【军令】已签发本年度平乱授权。高级军官可在有效期内执行一次。');save();render();return;
   }
   if(k==='kill'&&!isLeader(x)){
    if(!(isMilitary(x)&&rank(x)>=4&&validOrder(x,'rebel_suppression'))){note('【越权阻止】高级军官必须先取得本年度有效的平乱军令，不能自行决定镇压。');return;}
-   if((x.ap||0)<=0){note('行动已用完，无法执行军令。');return;}
-   x.ap--;
+   if(!actGate('order:exec','执行平乱军令'))return;
+   actCool('order:exec',30);
    var result=rebel46(k);
    x.authorizedOrders=x.authorizedOrders.filter(function(o){return !o||o.type!=='rebel_suppression';});
    save();render();return result;
@@ -5005,7 +5227,7 @@ setTimeout(installConstitutionEntry,500);
   s[attr]=clamp((Number(s[attr])||0)+gain);
  };
 
- // 各身份点击年度行动后，先选择本年度具体做法；只有确认选择才消耗行动点。
+ // 各身份点击事项后，先选择具体做法；确认后该事项进入独立冷却或开始持续行动（V4.18）。
  var annualChoices={
   memorial:{title:'本年朝政重点',items:[
    ['整顿钱粮与漕运','清查账册、疏通漕运，优先稳住财政与秩序。',function(x){gAdd('财政',4);gAdd('秩序',3);addExp('power',4);addExp('trust',3);}],
@@ -5091,27 +5313,59 @@ setTimeout(installConstitutionEntry,500);
   if(k==='drill'&&!military){flash('你没有军队身份，不能进行军事操练');return false;}
   return true;
  }
+ /* V4.18：取消年度行动点。每个事项独立冷却；部分事项是持续行动，到期自动结算。
+    ONGOING 中的事项：选择后先开工，效果在完成日结算（只结算一次，存档可恢复）。 */
+ var GOV_COOL={memorial:20,appoint:60,mobilize:45,treasury:60,tour:45,office:15,lobby:20,petition:45,inspect:20,earn:10,work:7,gossip:5,befriend:12,drill:30,rest:10};
+ var ONGOING={tour:{days:45,label:'出巡'},inspect:{days:20,label:'巡查'},drill:{days:30,label:'操练'},rest:{days:10,label:'休整'}};
+ /* 拨款兴办实业：大型建设，先付钱，约一年后才见效。 */
+ var BUILD={k:'treasury',i:2,days:360,label:'兴办实业（工矿与交通建设）'};
+ JOB_FX.menu=function(x,job){
+  var d=job.data||{},cfg=annualChoices[d.k],it=cfg&&cfg.items[d.i];
+  if(!it)return '';
+  it[2](x);
+  return it[0]+' 已见成效';
+ };
+ JOB_FX.build=function(x,job){
+  gAdd('工业',5);gAdd('经济',3);addExp('fame',2);
+  return '工厂与道路陆续投产，工业与经济上升';
+ };
+ window.__GOV_COOL=GOV_COOL;window.__GOV_ONGOING=ONGOING;
+ function govLabel(k){return annualNames[k]||'此事';}
  function openMenu(k){
   if(!s)return;
-  if((s.ap||0)<=0){flash('本年度行动次数已用完');return;}
   if(!allowed(k,s))return;
+  if(!actGate('gov:'+k,govLabel(k)))return;
   var cfg=annualChoices[k];if(!cfg){flash('这个行动暂时没有可选方案');return;}
   var mask=document.getElementById('mask'),tag=document.getElementById('dlgTag'),title=document.getElementById('dlgTitle'),desc=document.getElementById('dlgDesc'),body=document.getElementById('dlgBody');
   if(!mask||!body)return;
-  tag.textContent='年度决策 · '+s.year+'年 · 剩余行动 '+s.ap;
-  title.textContent=cfg.title;
-  desc.textContent='选择你今年要采取的具体做法。不同选择会影响个人处境与国家局势；确认后消耗 1 次行动。';
+  var og=ONGOING[k];
+  tag.textContent='行动决策 · '+calFmt(calToday());
+  title.textContent=cfg.title.replace(/^本年/,'');
+  desc.textContent=og?('这是持续行动：确认后开始，约 '+actDays(og.days)+' 个游戏日后自动结算效果；期间其他事务照常进行。')
+   :('确认后立即生效，此后约 '+actDays(GOV_COOL[k]||15)+' 个游戏日内不能再办同一件事。其他事务各自计算冷却。');
   body.innerHTML='';
   cfg.items.forEach(function(it,i){
    var b=document.createElement('button');b.className='choice';b.style.marginBottom='8px';
-   b.innerHTML='<b>'+it[0]+'</b><div class="small muted" style="margin-top:4px">'+it[1]+'</div>';
+   var isBuild=(k===BUILD.k&&i===BUILD.i);
+   var extra=isBuild?'<div class="chance">持续行动：约 '+actDays(BUILD.days)+' 天建成，先拨付银钱</div>':'';
+   b.innerHTML='<b>'+it[0]+'</b><div class="small muted" style="margin-top:4px">'+it[1]+'</div>'+extra;
    b.onclick=function(){
-    if(!s||(s.ap||0)<=0){mask.classList.add('hidden');flash('本年度行动次数已用完');return;}
-    var result=it[2](s);
-    if(result===false){return;}
-    s.ap=Math.max(0,(s.ap||0)-1);
-    s.lastAnnualChoice={year:s.year,action:k,choice:it[0]};
-    log('【'+(annualNames[k]||'年度行动')+'】本年选择：'+it[0]+'。');
+    if(!s||!actGate('gov:'+k,govLabel(k))){mask.classList.add('hidden');return;}
+    var j=null;
+    if(isBuild){
+     var c=Math.min(s.cash||0,180);s.cash-=c;gAdd('财政',-2);
+     j=jobStart('gov:'+k,{label:BUILD.label,days:BUILD.days,fx:'build',data:{k:k,i:i,paid:c}});
+     log('【'+govLabel(k)+'】拨银 '+c+' 两兴办实业，预计 '+calFmtOrd(j.end)+' 建成。');
+    }else if(og){
+     j=jobStart('gov:'+k,{label:og.label+'：'+it[0],days:og.days,fx:'menu',data:{k:k,i:i}});
+     log('【'+govLabel(k)+'】开始：'+it[0]+'，预计 '+calFmtOrd(j.end)+' 完成。');
+    }else{
+     var result=it[2](s);
+     if(result===false){return;}
+     var n=actCool('gov:'+k,GOV_COOL[k]||15);
+     log('【'+govLabel(k)+'】'+it[0]+'。（'+n+' 天后可再办）');
+    }
+    s.lastAnnualChoice={year:s.year,ord:calTodayOrd(),action:k,choice:it[0]};
     mask.classList.add('hidden');
     if(typeof persist==='function')persist();
     if(window.__RENDER)window.__RENDER();else if(typeof render==='function')render();
@@ -5127,7 +5381,7 @@ setTimeout(installConstitutionEntry,500);
  var st=document.createElement('style');
  st.textContent='.statsrow .bar.exp,.statsrow .x{display:none!important}.statsrow .st{padding-bottom:8px}';
  document.head.appendChild(st);
- var hint=document.getElementById('actHint');if(hint)hint.textContent='每年有固定行动次数。点击公务、生计或朝政事项，选择本年度具体计划；每次选择都会影响个人与时局。';
+ var hint=document.getElementById('actHint');if(hint)hint.textContent=ACT_HINT_TEXT;
  // 兼容旧存档：不再依赖经验字段，避免旧经验进度继续影响游戏。
  if(s){s.exp={skill:0,fame:0,power:0,trust:0};s.breakthrough=s.breakthrough||{};}
 })();
@@ -5138,7 +5392,7 @@ setTimeout(installConstitutionEntry,500);
  render=function(){
   renderV49();
   var hint=document.getElementById('actHint');
-  if(hint)hint.textContent='每年有固定行动次数。点击朝政、公务或生计事项，选择本年度具体计划；每次选择都会影响个人与时局。';
+  if(hint)hint.textContent=ACT_HINT_TEXT;
  };
 })();
 
@@ -5494,17 +5748,17 @@ setTimeout(installConstitutionEntry,500);
  function eligible(x,action){var r=role(x),rank=x.rank||0;if(action==='organize')return true;if(action==='contest')return rank>=1||['student','activist','merchant'].indexOf(r)>=0;if(action==='split')return ['leader','official','officer','activist'].indexOf(r)>=0;if(action==='reconcile')return true;if(action==='succession')return leader(x)||rank>=5;return false;}
  function positionFor(x){var r=role(x);return POSITIONS.filter(function(p){return p.roles.indexOf(r)>=0&&p.rank>(x.rank||0)&&p.id!=='chief';}).sort(function(a,b){return a.rank-b.rank;})[0]||POSITIONS.filter(function(p){return p.roles.indexOf(r)>=0&&p.id!=='chief';}).slice(-1)[0]||POSITIONS[0];}
  function action(kind,positionId){
-  var x=S();if(!x)return;var p=ensure(x),g=actualGroup(x);if((x.ap||0)<=0){note('行动已用完，无法参与组织政治。');return;}if(!eligible(x,kind)){note('以当前身份和职位，你暂时没有资格采取这项政治行动。');return;}
-  x.ap--;var r=role(x),result='',roll=Math.random();
+  var x=S();if(!x)return;var p=ensure(x),g=actualGroup(x);var cdKey='fac:'+kind,noCd=false;if(!actGate(cdKey,FAC_ACT_NAME[kind]||'组织政治'))return;if(!eligible(x,kind)){note('以当前身份和职位，你暂时没有资格采取这项政治行动。');return;}
+  var r=role(x),result='',roll=Math.random();
   if(kind==='organize'){
    var b=roleBonus(x,kind);g.influence=clamp(g.influence+5+b,0,100);g.support=clamp(g.support+4+Math.floor((x.fame||0)/35),0,100);g.loyalty=clamp(g.loyalty+3,0,100);p.cohesion=clamp(p.cohesion+2,0,100);x.power=clamp(x.power+2,0,100);x.trust=clamp(x.trust+1,0,100);
    result='你以'+(ROLE_LABEL[r]||'成员')+'身份经营派系：'+g.name+'的组织影响与支持上升。';
   }else if(kind==='contest'){
    var pos=p.positions.filter(function(q){return q.id===positionId;})[0]||p.positions.filter(function(q){return q.vacant&&q.rank>(x.rank||0);})[0]||p.positions.filter(function(q){return q.id===positionFor(x).id;})[0];
-   if(!pos){x.ap++;note('当前没有适合你竞争的职位。');return;}
+   if(!pos){note('当前没有适合你竞争的职位。');return;}
    var spec=POSITIONS.filter(function(q){return q.id===pos.id;})[0]||{roles:['official']};
-   if(spec.roles.indexOf(r)<0){x.ap++;note('该职位不符合你的身份任职范围。');return;}
-   if(pos.rank>(x.rank||0)+1){x.ap++;note('资历不足，暂时无法越级竞争该职位。');return;}
+   if(spec.roles.indexOf(r)<0){note('该职位不符合你的身份任职范围。');return;}
+   if(pos.rank>(x.rank||0)+1){note('资历不足，暂时无法越级竞争该职位。');return;}
    var incumbency=pos.vacant?8:-8;var support=g.support*.24+g.influence*.20+g.loyalty*.10+(x.trust||0)*.14+(x.fame||0)*.10+(x.skill||0)*.10+(x.power||0)*.12+roleBonus(x,'contest')+incumbency+(x.rank||0)*2;
    var chance=Math.max(8,Math.min(92,Math.round(25+(support-35)*1.15)));
    if(Math.random()*100<chance){var displaced=pos.incumbent;pos.incumbent=x.name;pos.factionId=g.id;pos.vacant=false;pos.contested=false;x.rank=clamp(Math.max(x.rank||0,pos.rank),0,7);x.power=clamp(x.power+5,0,100);x.fame=clamp(x.fame+3,0,100);g.support=clamp(g.support+5,0,100);g.influence=clamp(g.influence+4,0,100);p.cohesion=clamp(p.cohesion-2,0,100);result='职位竞争成功：你取得「'+pos.name+'」席位'+(displaced&&displaced!==x.name?'，原任者'+displaced+'被调离。':'。')+'支持你的派系扩大影响，其他派系开始重新结盟。';}
@@ -5514,7 +5768,7 @@ setTimeout(installConstitutionEntry,500);
    if(score>=68){p.cohesion=clamp(p.cohesion+12,0,100);p.factions.forEach(function(f){f.loyalty=clamp(f.loyalty+4,0,100);});x.trust=clamp(x.trust+3,0,100);if(p.split&&p.cohesion>=55){p.split=false;p.splitName='';p.factions=p.factions.filter(function(f){return f.id!=='g_split';});if(p.aligned==='g_split')p.aligned=p.factions[0].id;}result='各派接受共同议事、职位分配与资源协调方案，组织凝聚度明显回升。'+(p.split?' 分裂派同意恢复统一组织。':'');}
    else{p.cohesion=clamp(p.cohesion-4,0,100);x.trust=clamp(x.trust-2,0,100);result='和解谈判未能形成可执行的权力分享方案，各派互相指责，组织凝聚度下降。';}
   }else if(kind==='split'){
-   if(p.split){result='组织已经分裂，当前应先通过谈判、资源交换或权力分享推动复合。';x.ap++;}
+   if(p.split){result='组织已经分裂，当前应先通过谈判、资源交换或权力分享推动复合。';noCd=true;}
    else if(p.cohesion<=42||g.support>=58||leader(x)){
     var newId='g_split';var n=2;while(p.factions.some(function(f){return f.id===newId;})){newId='g_split'+n++;}
     var newFaction={id:newId,name:g.name+'分裂派',desc:'由路线分歧、干部任用与资源分配争议形成的独立组织中心。',support:clamp(g.support-12,18,62),loyalty:42,influence:clamp(g.influence-8,12,55),stance:'另立路线'};p.factions.push(newFaction);p.split=true;p.splitName=newFaction.name;p.cohesion=clamp(p.cohesion-14,0,100);g.support=clamp(g.support-8,0,100);newFaction.support=clamp(newFaction.support+12,0,100);p.aligned=newFaction.id;x.power=clamp(x.power+3,0,100);result='组织正式分裂：「'+newFaction.name+'」建立独立决策中心。你转入新派系，获得自主空间，但资源、合法性与跨派协调能力受损。';
@@ -5524,8 +5778,9 @@ setTimeout(installConstitutionEntry,500);
    var incumbent=leader(x);var chance=Math.max(5,Math.min(95,Math.round((x.power||0)*.22+(x.fame||0)*.12+(x.trust||0)*.18+g.support*.20+g.influence*.13+(x.rank||0)*3+roleBonus(x,kind)-18)));
    if(incumbent){p.succession=clamp(p.succession+10,0,100);p.cohesion=clamp(p.cohesion+3,0,100);result='你主持权力交接程序，推动派系协商继任人选；继承稳定度提高。';}
    else if(p.crisis||!vacancy||vacancy.vacant||p.succession>=40){if(Math.random()*100<chance){if(vacancy){vacancy.incumbent=x.name;vacancy.vacant=false;vacancy.factionId=g.id;}x.isLeader=true;x.internalPolitics.isFactionLeader=true;p.leaderName=x.name;p.succession=clamp(p.succession+18,0,100);x.power=clamp(x.power+8,0,100);x.fame=clamp(x.fame+5,0,100);p.crisis=false;p.factions.forEach(function(f){f.loyalty=clamp(f.loyalty+(f.id===g.id?8:-5),0,100);});result='权力更迭成功：主要派系接受你成为新的最高负责人。旧班底、反对派和地方力量将重新评估忠诚。';}else{p.cohesion=clamp(p.cohesion-8,0,100);x.trust=clamp(x.trust-6,0,100);result='权力交接竞争失败。现有领导集团仍掌握多数支持，你被视为潜在挑战者。';}}
-   else{ x.ap++;note('目前没有最高职位空缺或继承危机；只有进入核心层级后才能发起权力交接。');return;}
+   else{ note('目前没有最高职位空缺或继承危机；只有进入核心层级后才能发起权力交接。');return;}
   }
+  if(!noCd)actCool(cdKey,FAC_ACT_DAYS[kind]||60);
   addHistory(p,result);note('【组织政治】'+result);save();draw();openPanel();
  }
  function openPanel(){
@@ -5535,17 +5790,17 @@ setTimeout(installConstitutionEntry,500);
   body.appendChild(intro);
   var fh=document.createElement('div');fh.className='constitution-group';fh.innerHTML='<b>派系力量</b>';body.appendChild(fh);
   p.factions.slice().sort(function(a,b){return b.support-a.support;}).forEach(function(f){var row=document.createElement('div');row.className='constitution-group';row.innerHTML='<b>'+esc(f.name)+'</b><p class="small">'+esc(f.desc)+'</p><div class="small">支持 '+f.support+' · 影响 '+f.influence+' · 忠诚 '+f.loyalty+(p.aligned===f.id?' · <b>你当前依靠</b>':'')+'</div><div class="bar"><i style="width:'+f.support+'%"></i></div>';
-   var join=document.createElement('button');join.className='btn sm';join.textContent=p.aligned===f.id?'当前依靠派系':'转而依靠该派系';join.disabled=p.aligned===f.id||x.ap<=0;join.onclick=function(){if(x.ap<=0)return;x.ap--;var old=actualGroup(x);old.loyalty=clamp(old.loyalty-4,0,100);p.aligned=f.id;f.loyalty=clamp(f.loyalty+8,0,100);f.support=clamp(f.support+3,0,100);x.power=clamp(x.power+2,0,100);addHistory(p,'你转而依靠「'+f.name+'」，原有盟友关系受到影响。');note('【派系交涉】你转而依靠「'+f.name+'」。');save();draw();openPanel();};row.appendChild(join);body.appendChild(row);});
+   var join=document.createElement('button');join.className='btn sm';join.textContent=p.aligned===f.id?'当前依靠派系':'转而依靠该派系';join.disabled=p.aligned===f.id||!!actBusy('fac:align');if(p.aligned!==f.id&&actBusy('fac:align'))join.textContent+='（'+actBusyText(actBusy('fac:align'))+'）';join.onclick=function(){if(!actGate('fac:align','转投派系'))return;actCool('fac:align',60);var old=actualGroup(x);old.loyalty=clamp(old.loyalty-4,0,100);p.aligned=f.id;f.loyalty=clamp(f.loyalty+8,0,100);f.support=clamp(f.support+3,0,100);x.power=clamp(x.power+2,0,100);addHistory(p,'你转而依靠「'+f.name+'」，原有盟友关系受到影响。');note('【派系交涉】你转而依靠「'+f.name+'」。');save();draw();openPanel();};row.appendChild(join);body.appendChild(row);});
   var ph=document.createElement('div');ph.className='constitution-group';ph.innerHTML='<b>职位与任免</b><p class="small muted">席位空缺、现任者、所属派系都会影响竞争。职位竞争成功才会实际占据席位。</p>';body.appendChild(ph);
   p.positions.forEach(function(pos){var line=document.createElement('div');line.className='small';var faction=p.factions.filter(function(f){return f.id===pos.factionId;})[0];line.style.margin='7px 0';line.innerHTML='<b>'+esc(pos.name)+'</b>（第'+pos.rank+'级） · '+(pos.vacant?'<span style="color:var(--red)">空缺</span>':'现任：'+esc(pos.incumbent||'未知'))+' · '+esc(faction?faction.name:'未归属');ph.appendChild(line);});
-  var actions=document.createElement('div');actions.className='constitution-group';actions.innerHTML='<b>政治行动（每项消耗1次年度行动）</b>';body.appendChild(actions);
-  function btn(label,desc,fn,disabled){var b=document.createElement('button');b.className='choice';b.disabled=!!disabled;b.innerHTML='<b>'+label+'</b><div class="sub">'+desc+'</div>';b.onclick=fn;actions.appendChild(b);}
-  btn('经营派系、扩大支持','召开会议、发展成员、协调资源。不同身份的组织能力不同。',function(){action('organize');},!eligible(x,'organize')||x.ap<=0);
+  var actions=document.createElement('div');actions.className='constitution-group';actions.innerHTML='<b>政治行动（各项独立冷却，按游戏日计算）</b>';body.appendChild(actions);
+  function btn(label,desc,fn,disabled,key){var bz=key?actBusy(key):null;var b=document.createElement('button');b.className='choice';b.disabled=!!disabled||!!bz;b.innerHTML='<b>'+label+'</b><div class="sub">'+desc+'</div>'+(bz?'<div class="chance" style="color:var(--red)">'+actBusyText(bz)+'</div>':'');b.onclick=fn;actions.appendChild(b);}
+  btn('经营派系、扩大支持','召开会议、发展成员、协调资源。不同身份的组织能力不同。',function(){action('organize');},!eligible(x,'organize'),'fac:organize');
   var candidate=p.positions.filter(function(q){var spec=POSITIONS.filter(function(z){return z.id===q.id;})[0];return spec&&spec.roles.indexOf(role(x))>=0&&q.rank<=(x.rank||0)+1&&q.id!=='chief';}).sort(function(a,b){return a.rank-b.rank;})[0];
-  btn('竞争职位：'+(candidate?candidate.name:'暂无合适席位'),'挑战现任者或填补空缺；失败会损害信任、声望和组织凝聚。',function(){action('contest',candidate&&candidate.id);},!candidate||!eligible(x,'contest')||x.ap<=0);
-  btn('协商派系和解','以职位分享、路线妥协和资源分配降低组织分裂风险。',function(){action('reconcile');},!eligible(x,'reconcile')||x.ap<=0);
-  btn(p.split?'巩固分裂派系':'推动组织分裂','分裂可能获得独立路线，但将损失整体资源、协调能力与合法性。',function(){action('split');},!eligible(x,'split')||x.ap<=0||p.split);
-  btn('参与最高权力更迭','需要继承危机、最高职位空缺或较高继承稳定度；领袖可主持交接。',function(){action('succession');},!eligible(x,'succession')||x.ap<=0||(!leader(x)&&!p.crisis&&p.succession<40&&!p.positions.some(function(q){return q.id==='chief'&&q.vacant;})));
+  btn('竞争职位：'+(candidate?candidate.name:'暂无合适席位'),'挑战现任者或填补空缺；失败会损害信任、声望和组织凝聚。',function(){action('contest',candidate&&candidate.id);},!candidate||!eligible(x,'contest'),'fac:contest');
+  btn('协商派系和解','以职位分享、路线妥协和资源分配降低组织分裂风险。',function(){action('reconcile');},!eligible(x,'reconcile'),'fac:reconcile');
+  btn(p.split?'巩固分裂派系':'推动组织分裂','分裂可能获得独立路线，但将损失整体资源、协调能力与合法性。',function(){action('split');},!eligible(x,'split')||p.split,'fac:split');
+  btn('参与最高权力更迭','需要继承危机、最高职位空缺或较高继承稳定度；领袖可主持交接。',function(){action('succession');},!eligible(x,'succession')||(!leader(x)&&!p.crisis&&p.succession<40&&!p.positions.some(function(q){return q.id==='chief'&&q.vacant;})),'fac:succession');
   var hist=document.createElement('div');hist.className='constitution-group';hist.innerHTML='<b>政治记录</b>'+(p.history.length?p.history.slice(0,10).map(function(h){return '<p class="small">'+h.year+'年：'+esc(h.text)+'</p>';}).join(''):'<p class="small muted">尚无派系政治记录。</p>');body.appendChild(hist);
   var close=document.createElement('button');close.className='btn block';close.textContent='关闭';close.onclick=function(){document.getElementById('mask').classList.add('hidden');};body.appendChild(close);document.getElementById('mask').classList.remove('hidden');
  }
@@ -5804,4 +6059,390 @@ setTimeout(installConstitutionEntry,500);
  applySave=function(d){var r=oldApplySave.apply(this,arguments);try{ensure(s);}catch(e){}return r;};
  if(s)ensure(s);
 })();
+
+/* ================= V4.17：实时日历推进 / V4.18：行动冷却界面 =================
+   一个时钟、一个循环：按真实流逝的毫秒累积，逐日推进（绝不跳日、绝不重复）。
+   每日：持续行动结算、到期历史事件；每月 1 日：自动存档与月度钩子；
+   每年 12 月 31 日结束：年度结算（lastSettledYear 保证每年只结算一次）并弹出年度报告；
+   1972 年 12 月 31 日结束：最终历史结算，时钟停止。 */
+var CLOCK={speed:0,acc:0,last:0,timer:null,settling:false,evOrd:null,wasBlocked:false,needRender:false,uiOrd:null,uiAt:0,pauseReason:''};
+var SPEED_DPS=[0,1,5,20];              /* 每真实秒推进的游戏日数 */
+var SPEED_NAME=['暂停','正常','快速','极速'];
+var IMPORTANT_TAGS=['【内乱】','【开战】','【战果】','【身故】','【组织危机】','【组织分裂】','【失地】','【和约】','【败绩】','【战后路线判定】','【结局】'];
+
+function calSnap(){
+ if(!s) return null;
+ var N=s.natl||{}, n={};
+ NAT_KEYS.forEach(function(k){ n[k[0]]=Math.round(+N[k[0]]||0); });
+ return {y:s.year,natl:n,cash:Math.round(+s.cash||0),skill:+s.skill||0,fame:+s.fame||0,power:+s.power||0,trust:+s.trust||0,
+  rank:+s.rank||0,alt:+s.alt||0,troops:(s.unit&&+s.unit.troops)||0,
+  title:(window.rankTitleOf?window.rankTitleOf():((FAC[s.faction]||{}).ladder||[])[s.rank]||'')};
+}
+function logText(html){ return String(html||'').replace(/<[^>]+>/g,'').replace(/^\s+/,''); }
+/* 时钟补齐（新开局、读档、旧档迁移都会走到这里） */
+function calInitState(fresh){
+ if(!s) return;
+ var had=!!(s.cal&&typeof s.cal.ord==='number');
+ if(fresh){ s.cal=null; s.cooldowns={}; s.jobs=[]; s.histRec=[]; s.yearReports=[]; }
+ calEnsure(s);
+ if(!Array.isArray(s.histRec)) s.histRec=[];
+ if(!Array.isArray(s.yearReports)) s.yearReports=[];
+ if(!s.cal.yearSnap||s.cal.yearSnap.y!==s.year) s.cal.yearSnap=calSnap();
+ if(s.cal.finished&&s.cal.finalEnding) s.ending=s.cal.finalEnding;
+ return had;
+}
+
+/* ---------- 年度结算（每年只执行一次） ---------- */
+function calYearEnd(Y){
+ if(!s||s.dead) return false;
+ if(s.cal.lastSettledYear>=Y) return false;   /* 重复调用直接忽略 */
+ s.cal.lastSettledYear=Y;                       /* 先落标记，即使后续某个钩子出错也不会重算 */
+ var snap=s.cal.yearSnap||calSnap();
+ var head=s.logs[0];
+ CLOCK.settling=true;
+ try{ advance(); }catch(e){}
+ finally{ CLOCK.settling=false; }
+ if(s.dead){ return true; }
+ if(s.year!==Y+1) s.year=Y+1;                  /* 年份镜像必须与日历一致 */
+ var settle=[];
+ for(var i=0;i<s.logs.length&&s.logs[i]!==head;i++) settle.push(logText(s.logs[i]));
+ var rep=calBuildReport(Y,snap,settle.reverse());
+ s.cal.pendingReport=rep;
+ s.yearReports.push({y:Y,natl:rep.after.natl,ev:rep.events.slice(0,5),title:rep.after.title,cash:rep.after.cash});
+ if(s.yearReports.length>140) s.yearReports=s.yearReports.slice(-140);
+ s.cal.yearSnap=calSnap();
+ CLOCK.needRender=true;
+ if(window.__yearEndHook) try{ window.__yearEndHook(Y); }catch(e){}
+ return true;
+}
+function calBuildReport(Y,snap,settle){
+ var after=calSnap();
+ var evs=(s.histRec||[]).filter(function(r){return r.y===Y;}).map(function(r){return calFmtOrd(r.ord).replace(/^\d+年/,'')+' '+r.t+'：'+r.c;});
+ var evTags=(s.histRec||[]).filter(function(r){return r.y===Y;}).map(function(r){return '【'+r.t+'】';});
+ var big=[];
+ (s.logs||[]).forEach(function(h){
+  var t=logText(h);
+  if(t.indexOf(Y+'年')!==0||!/【[^】]+】/.test(t)||t.indexOf('【历法】')>=0) return;
+  for(var i=0;i<evTags.length;i++){ if(t.indexOf(evTags[i])>=0) return; } /* 抉择已在上方列出 */
+  big.push(t.replace(/^\d+年/,''));
+ });
+ return {y:Y,before:snap,after:after,events:evs,big:big.slice(0,8).reverse(),settle:(settle||[]).slice(0,10),jobs:(s.jobs||[]).length};
+}
+function calReportHTML(r){
+ if(!r) return '';
+ function dl(a,b){ var d=Math.round(b-a); return d>0?'<span class="up">+'+d+'</span>':(d<0?'<span class="down">'+d+'</span>':'<span class="muted">±0</span>'); }
+ var h='';
+ h+='<div class="yr-sec"><b>国家变化</b><div class="yr-grid">';
+ NAT_KEYS.forEach(function(k){ var a=(r.before&&r.before.natl&&r.before.natl[k[0]])||0, b=r.after.natl[k[0]]||0; h+='<span>'+k[1]+' '+b+' '+dl(a,b)+'</span>'; });
+ h+='</div></div>';
+ var B=r.before||r.after, A=r.after;
+ h+='<div class="yr-sec"><b>个人变化</b><div class="yr-grid">'+
+  '<span>能力 '+Math.round(A.skill)+' '+dl(B.skill,A.skill)+'</span><span>声望 '+Math.round(A.fame)+' '+dl(B.fame,A.fame)+'</span>'+
+  '<span>政治 '+Math.round(A.power)+' '+dl(B.power,A.power)+'</span><span>信任 '+Math.round(A.trust)+' '+dl(B.trust,A.trust)+'</span>'+
+  '<span>银钱 '+A.cash+' 两 '+dl(B.cash,A.cash)+'</span><span>影响 '+A.alt+' '+dl(B.alt,A.alt)+'</span></div>'+
+  (A.title!==B.title?'<p class="small">职位：'+B.title+' → <b>'+A.title+'</b></p>':'<p class="small muted">职位：'+A.title+'</p>')+'</div>';
+ if(r.events.length) h+='<div class="yr-sec"><b>本年抉择</b><ul>'+r.events.map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
+ if(r.big.length) h+='<div class="yr-sec"><b>本年纪事</b><ul>'+r.big.map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
+ if(r.settle.length) h+='<div class="yr-sec"><b>年终结算</b><ul>'+r.settle.map(function(t){return '<li>'+t.replace(/^\d+年\d+月\d+日\s*/,'')+'</li>';}).join('')+'</ul></div>';
+ if(r.jobs) h+='<p class="small muted">尚有 '+r.jobs+' 项持续行动跨年进行。</p>';
+ return h;
+}
+function calShowReport(){
+ if(!s||!s.cal.pendingReport) return false;
+ var r=s.cal.pendingReport; s.cal.pendingReport=null;
+ $('dlgTag').textContent='年度报告 · '+r.y+'年';
+ $('dlgTitle').textContent=r.y+'年度报告';
+ $('dlgDesc').textContent=r.y+'年12月31日结束，年度结算已完成。时间已暂停，看完后自动继续。';
+ $('dlgBody').innerHTML='<div class="yr-report">'+calReportHTML(r)+'</div><button class="choice" id="yrOk" style="text-align:center"><b>知道了，进入'+(r.y+1)+'年</b></button>';
+ $('mask').classList.remove('hidden');
+ var b=document.getElementById('yrOk'); if(b) b.onclick=function(){ $('mask').classList.add('hidden'); };
+ return true;
+}
+
+/* ---------- 最终结算：1972 年 12 月 31 日 ---------- */
+function calFinal(){
+ if(!s||s.cal.finished) return false;
+ s.cal.finished=true;
+ s.cal.lastSettledYear=CAL_END_YEAR;
+ CLOCK.speed=0;
+ var snap=s.cal.yearSnap||calSnap();
+ var rep=calBuildReport(CAL_END_YEAR,snap,[]);
+ s.yearReports.push({y:CAL_END_YEAR,natl:rep.after.natl,ev:rep.events.slice(0,5),title:rep.after.title,cash:rep.after.cash});
+ var v={t:'结局',d:''}; try{ v=verdict(); }catch(e){}
+ var lv=s.alt>=20?'历史改写者':s.alt>=12?'历史的参与者':s.alt>=5?'时代的见证者':'时代的过客';
+ var sum=['能力 '+s.skill+'、声望 '+s.fame+'、政治 '+s.power+'、上级信任 '+s.trust,
+  '职位：'+rep.after.title+(s.clique?'（'+s.clique+'）':''),
+  '银钱 '+Math.round(s.cash)+' 两，历史影响 '+s.alt+'（'+lv+'）',
+  '亲历并作出抉择的历史事件 '+(s.histRec||[]).length+' 件，经历年度结算 '+s.yearReports.length+' 次'];
+ s.ending={t:v.t,d:'1972年12月31日，'+(v.d||''),sum:sum,final:true};
+ s.cal.finalEnding=s.ending;
+ try{ log('【结局】'+s.ending.t+'——历史走到了1972年末。'); }catch(e){}
+ var recs=(s.histRec||[]).slice(-15).map(function(r){return '<li>'+calFmtOrd(r.ord)+' '+r.t+'：'+r.c+'</li>';}).join('');
+ $('dlgTag').textContent='历史终章 · 1972年12月31日';
+ $('dlgTitle').textContent=s.name+' · 本局历史总结';
+ $('dlgDesc').textContent=s.ending.d;
+ $('dlgBody').innerHTML='<div class="yr-report">'+
+  '<div class="yr-sec"><b>你的一生</b><ul>'+sum.map(function(t){return '<li>'+t+'</li>';}).join('')+'<li>'+s.birth+'年生，1972年末时 '+(CAL_END_YEAR-s.birth)+' 岁</li></ul></div>'+
+  (recs?'<div class="yr-sec"><b>你亲历的历史关头（最近 15 件）</b><ul>'+recs+'</ul></div>':'')+
+  '<div class="yr-sec"><b>1972年度报告</b>'+calReportHTML(rep)+'</div></div>'+
+  '<button class="choice" id="finRestart" style="text-align:center"><b>重新开始</b></button>'+
+  '<button class="choice" id="finStay" style="text-align:center"><b>留下来翻看档案</b></button>';
+ $('mask').classList.remove('hidden');
+ var r1=document.getElementById('finRestart'); if(r1) r1.onclick=function(){ $('mask').classList.add('hidden'); s=null; world=null; $('game').classList.add('hidden'); $('setup').classList.remove('hidden'); };
+ var r2=document.getElementById('finStay'); if(r2) r2.onclick=function(){ $('mask').classList.add('hidden'); };
+ persist();
+ CLOCK.needRender=true;
+ return true;
+}
+
+/* ---------- 每月 / 每日 ---------- */
+function calMonthTick(now){
+ /* 战事随时间消耗粮草：战争不再只在玩家点按钮时才“过日子”。 */
+ try{
+  if(world&&world.war&&world.war.my&&!world.war.done){
+   world.war.my.sup=Math.max(0,(+world.war.my.sup||0)-3);
+   if(world.war.my.sup<25) world.war.my.mor=Math.max(0,(+world.war.my.mor||0)-2);
+  }
+ }catch(e){}
+ if(window.__monthTick) try{ window.__monthTick(now); }catch(e){}
+ persist();                       /* 自动存档：每月一次，不是每天 */
+ CLOCK.needRender=true;
+}
+function calDayTick(now){
+ if(jobsProcess()>0) CLOCK.needRender=true;
+ if(window.__dayTick) try{ window.__dayTick(now); }catch(e){}
+}
+
+/* 推进恰好一天。返回 true 表示日期前进了一天。 */
+function calStepDay(){
+ if(!s||s.dead) return false;
+ if(!s.cal) calInitState(false);
+ var c=s.cal;
+ if(c.finished) return false;
+ if(c.ord>=CAL_END_ORD){ calFinal(); return false; }
+ var head=s.logs[0];
+ var before=calFromOrd(c.ord);
+ c.ord+=1;
+ var now=calFromOrd(c.ord);
+ if(now.y!==before.y){ calYearEnd(before.y); if(!s.dead&&s.year!==now.y) s.year=now.y; }
+ if(s.dead){ CLOCK.speed=0; CLOCK.needRender=true; return true; }
+ if(now.d===1) calMonthTick(now);
+ calDayTick(now);
+ /* 重大事件自动暂停 */
+ for(var i=0;i<s.logs.length&&s.logs[i]!==head;i++){
+  var t=logText(s.logs[i]);
+  for(var k=0;k<IMPORTANT_TAGS.length;k++){
+   if(t.indexOf(IMPORTANT_TAGS[k])>=0){ calPause('重大事件：'+t.replace(/^\d+年\d+月\d+日\s*/,'').slice(0,40)); i=s.logs.length; break; }
+  }
+ }
+ return true;
+}
+function calAdvanceDays(n){ var k=0; for(var i=0;i<n;i++){ if(!calStepDay()) break; k++; } return k; }
+
+/* ---------- 速度与暂停 ---------- */
+function calSetSpeed(v){
+ v=Math.max(0,Math.min(3,Math.round(+v||0)));
+ if(!s){ CLOCK.speed=0; return; }
+ calEnsure(s);
+ if(v>0&&(s.dead||s.cal.finished)){ calToast(s.dead?'人已不在，时间不再为你流动。':'历史已经走到 1972 年末。'); v=0; }
+ CLOCK.speed=v; CLOCK.acc=0; CLOCK.last=Date.now();
+ if(v>0){ s.cal.speedPref=v; CLOCK.pauseReason=''; }
+ calClockUI(true);
+}
+function calPause(reason){ if(CLOCK.speed>0){ CLOCK.speed=0; CLOCK.acc=0; CLOCK.pauseReason=reason||''; if(reason) calToast(reason+' —— 时间已暂停'); } }
+function calBlocked(){
+ var m=document.getElementById('mask');
+ if(m&&m.classList&&!m.classList.contains('hidden')) return '事件待处理';
+ if(document.getElementById('v42meet')) return '拜会中';
+ return '';
+}
+/* 年度报告、到期历史事件：只在没有其它弹窗时处理，避免互相覆盖。 */
+function calFlush(){
+ if(!s) return;
+ if(s.cal.pendingReport){ calShowReport(); return; }
+ if(s.dead||s.cal.finished) return;
+ if(CLOCK.evOrd!==s.cal.ord||CLOCK.wasBlocked){
+  CLOCK.evOrd=s.cal.ord;
+  try{ maybeEvent(); }catch(e){}
+ }
+}
+function calLoop(){
+ var now=Date.now(), dt=CLOCK.last?Math.max(0,now-CLOCK.last):0; CLOCK.last=now;
+ if(!s){ CLOCK.acc=0; return; }
+ if(!s.cal) calInitState(false);
+ var blocked=calBlocked();
+ if(!blocked){ calFlush(); blocked=calBlocked(); }
+ CLOCK.wasBlocked=!!blocked;
+ var hidden=(typeof document.hidden==='boolean')&&document.hidden;
+ if(CLOCK.speed>0&&!blocked&&!hidden&&!s.dead&&!s.cal.finished){
+  CLOCK.acc+=Math.min(dt,250);                 /* 后台/卡顿后最多补 0.25 秒，不会一下推进几个月 */
+  var per=1000/SPEED_DPS[CLOCK.speed], steps=0;
+  while(CLOCK.acc>=per&&steps<12){
+   CLOCK.acc-=per; steps++;
+   calStepDay();
+   if(!calBlocked()) calFlush();   /* 当天到期的事件/年度报告在当天弹出，不会拖到下一帧 */
+   if(CLOCK.speed===0||s.dead||s.cal.finished||calBlocked()||s.cal.pendingReport){ CLOCK.acc=0; break; }
+  }
+ }else CLOCK.acc=0;
+ if(CLOCK.needRender){ CLOCK.needRender=false; try{ if(window.__RENDER) window.__RENDER(); else render(); }catch(e){} }
+ calClockUI(false);
+}
+
+/* ---------- 界面：顶部时间栏、冷却标注、进行中的事务 ---------- */
+function calShort(ord){ var o=calFromOrd(ord), t=calToday(); return (o.y===t.y?'':o.y+'年')+o.m+'月'+o.d+'日'; }
+function calDecorate(){
+ if(!s) return;
+ var els=document.querySelectorAll('[data-cd]');
+ for(var i=0;i<els.length;i++){
+  var el=els[i], key=el.getAttribute('data-cd'), b=actBusy(key), note=el.querySelector('.cdnote');
+  if(b){
+   if(!el.disabled){ el.disabled=true; el.setAttribute('data-cdoff','1'); }
+   var txt=b.kind==='job'?('进行中 · '+calShort(b.until)+'完成'):('冷却 '+b.days+' 天 · '+calShort(b.until)+'可行');
+   if(!note){ note=document.createElement('span'); note.className='cdnote'; el.appendChild(note); }
+   if(note.textContent!==txt) note.textContent=txt;
+   el.title=actBusyText(b);
+  }else{
+   if(el.getAttribute('data-cdoff')){ el.disabled=false; el.removeAttribute('data-cdoff'); }
+   if(note) note.parentNode.removeChild(note);
+   if(el.title) el.title='';
+  }
+ }
+}
+function calRenderJobs(){
+ if(!s) return;
+ var t=document.getElementById('actTitle'); if(!t) return;
+ var card=t.closest?t.closest('.card'):null; if(!card) return;
+ var box=document.getElementById('calJobs');
+ if(!box){ box=document.createElement('div'); box.id='calJobs'; box.className='cal-jobs'; card.appendChild(box); }
+ var today=s.cal.ord, h='';
+ (s.jobs||[]).forEach(function(j){
+  var tot=Math.max(1,j.end-j.start), pct=Math.max(0,Math.min(100,Math.round((today-j.start)/tot*100)));
+  h+='<div class="cal-job"><div class="small"><b>'+j.label+'</b> · 预计 '+calFmtOrd(j.end)+' 完成（还需 '+Math.max(0,j.end-today)+' 天）</div><div class="bar"><i style="width:'+pct+'%"></i></div></div>';
+ });
+ var cools=Object.keys(s.cooldowns||{}).filter(function(k){ return s.cooldowns[k]>today&&!jobOf(k); });
+ if(cools.length) h+='<div class="small muted" style="margin-top:4px">冷却中 '+cools.length+' 项（按钮上标有可再行日期）</div>';
+ if(!h) h='<div class="small muted">眼下没有进行中的持续行动。</div>';
+ if(box.innerHTML!==h) box.innerHTML=h;
+}
+function calClockUI(force){
+ if(!s||!s.cal) return;
+ var now=Date.now();
+ var dayChanged=CLOCK.uiOrd!==s.cal.ord;
+ if(!force&&!dayChanged&&now-CLOCK.uiAt<400) return;
+ CLOCK.uiOrd=s.cal.ord;
+ var d=calFmtOrd(s.cal.ord);
+ var e=document.getElementById('hudYear'); if(e&&e.textContent!==d) e.textContent=d;
+ var hy=document.getElementById('hYear'); if(hy&&hy.textContent!==d) hy.textContent=d;
+ var blocked=calBlocked();
+ var sp=document.getElementById('hudSpeed');
+ if(sp){
+  var txt=s.cal.finished?'已结束':(s.dead?'已终':(CLOCK.speed===0?'已暂停':(blocked?('等待处理 · '+SPEED_NAME[CLOCK.speed]):(SPEED_NAME[CLOCK.speed]+' · '+SPEED_DPS[CLOCK.speed]+'天/秒'))));
+  if(sp.textContent!==txt) sp.textContent=txt;
+  sp.className='hud-spd'+(CLOCK.speed===0||blocked?' paused':'');
+ }
+ var bs=document.querySelectorAll('#hudClock [data-spd]');
+ for(var i=0;i<bs.length;i++){ var on=(+bs[i].getAttribute('data-spd'))===CLOCK.speed; if(bs[i].classList.contains('on')!==on) bs[i].classList.toggle('on',on); }
+ var hj=document.getElementById('hudJobs'); if(hj){ var jt=(s.jobs||[]).length+' 项'; if(hj.textContent!==jt) hj.textContent=jt; }
+ /* 冷却标注、进行中列表、布局较重：最多每 250 毫秒刷新一次（渲染时强制刷新） */
+ if(force||now-CLOCK.uiAt>=250){ CLOCK.uiAt=now; calDecorate(); calRenderJobs(); calLayout(); }
+}
+function calLayout(){
+ var hud=document.getElementById('hud'), tabs=document.getElementById('tabs');
+ if(!hud||!tabs||!window.matchMedia) return;
+ if(window.matchMedia('(max-width:760px)').matches){
+  if(tabs.style.top) tabs.style.top='';
+  var mp=(hud.offsetHeight||70)+'px'; if(s&&document.body.style.paddingTop!==mp) document.body.style.paddingTop=mp;
+  return;
+ }
+ var h=hud.offsetHeight||44;
+ var top=h+'px'; if(tabs.style.top!==top) tabs.style.top=top;
+ var pad=(h+(tabs.offsetHeight||40)+2)+'px';
+ if(s&&document.body.style.paddingTop!==pad) document.body.style.paddingTop=pad;
+}
+function calBindUI(){
+ var box=document.getElementById('hudClock');
+ if(box&&!box.getAttribute('data-bound')){
+  box.setAttribute('data-bound','1');
+  box.addEventListener('click',function(e){
+   var b=e.target.closest?e.target.closest('[data-spd]'):null; if(!b) return;
+   calSetSpeed(+b.getAttribute('data-spd'));
+  });
+ }
+ if(!document.__calKey){
+  document.__calKey=1;
+  document.addEventListener('keydown',function(e){
+   if(!s||e.code!=='Space') return;
+   var tg=(e.target&&e.target.tagName)||'';
+   var inClock=!!(e.target&&e.target.closest&&e.target.closest('#hudClock'));
+   if((!inClock&&/INPUT|TEXTAREA|SELECT|BUTTON/.test(tg))||calBlocked()) return;
+   e.preventDefault();
+   calSetSpeed(CLOCK.speed>0?0:(s.cal.speedPref||1));
+  });
+ }
+}
+
+/* ---------- 接线：开局 / 读档 / 存档 / 结局 ---------- */
+var _initV417=init;
+init=function(){
+ _initV417.apply(null,arguments);
+ if(!s) return;
+ calInitState(true);
+ CLOCK.speed=0; CLOCK.evOrd=null;
+ log('【历法】'+calFmtOrd(s.cal.ord)+'，时间已暂停。点顶部「正常」开始推进；空格键可暂停/继续。');
+ try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
+ calClockUI(true);
+};
+var _applySaveV417=applySave;
+applySave=function(d){
+ var r=_applySaveV417.apply(this,arguments);
+ if(s){
+  var had=calInitState(false);
+  if(!had) log('【历法】旧存档没有日期，已迁移到 '+calFmtOrd(s.cal.ord)+'。');
+  CLOCK.speed=0; CLOCK.acc=0; CLOCK.evOrd=null;   /* 读档后一律暂停 */
+  try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
+  calClockUI(true);
+ }
+ return r;
+};
+var _packV417=packSave;
+packSave=function(){
+ var o=_packV417.apply(null,arguments);
+ o.v='4.18';
+ if(s&&s.cal){ o.date=calFmtOrd(s.cal.ord); o.ord=s.cal.ord; }
+ return o;
+};
+/* 列强交涉：处理函数层面的冷却校验（权限校验在内层 V4.6 包装里） */
+var _powerActV418=powerAct;
+powerAct=function(k,n){
+ if(!actGate('pw:'+k+':'+n,({talk:'交涉',loan:'借款',buy:'购舰',war:'宣战/和谈'})[k]||'外事')) return;
+ return _powerActV418.apply(this,arguments);
+};
+var _checkEndingV417=checkEnding;
+checkEnding=function(){
+ if(s&&s.cal&&s.cal.finished&&s.cal.finalEnding){ s.ending=s.cal.finalEnding; return; }
+ return _checkEndingV417.apply(null,arguments);
+};
+JOB_FX.unitDrill=function(x,job){
+ if(!x.unit) return '';
+ var g=Math.round(rnd(6,11));
+ x.unit.mor=clamp(x.unit.mor+g); x.unit.sup=clamp(x.unit.sup-Math.round(rnd(1,3))); x.skill=clamp((+x.skill||0)+1);
+ return '弟兄们骂娘，动作倒是整齐了；士气 +'+g;
+};
+var _renderV417=render;
+render=function(){ _renderV417.apply(null,arguments); try{ calClockUI(true); }catch(e){} };
+window.__CAL={
+ isLeap:calIsLeap,monthDays:calMonthDays,ord:calOrd,fromOrd:calFromOrd,fmt:calFmt,END_ORD:CAL_END_ORD,
+ stepDay:calStepDay,advanceDays:calAdvanceDays,setSpeed:calSetSpeed,loop:calLoop,clock:CLOCK,
+ yearEnd:calYearEnd,final:calFinal,flush:calFlush,today:calToday,
+ busy:actBusy,gate:actGate,cool:actCool,jobStart:jobStart,jobsProcess:jobsProcess,factor:actFactor,days:actDays,evDue:evDue
+};
+window.__actBusy=actBusy;
+window.__doGovern=function(k){ return doGovern(k); }; /* 供测试与外部按钮调用，仍走全部权限与冷却校验 */
+window.__powerAct=function(k,n){ return powerAct(k,n); };
+CLOCK.last=Date.now();
+CLOCK.timer=setInterval(function(){ try{ calLoop(); }catch(e){ if(window.console) console.error(e); } },100);
+setTimeout(calBindUI,0);
+document.addEventListener('DOMContentLoaded',calBindUI);
+window.addEventListener&&window.addEventListener('resize',function(){ try{ calLayout(); }catch(e){} });
+
 })(); /* 主作用域结束 */

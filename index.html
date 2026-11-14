@@ -3,20 +3,29 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>山河：1840—1972 · V4.16.1</title>
+<title>山河：1840—1972 · V4.18.0</title>
 <meta name="description" content="山河：1840—1972，中国近代史人生模拟。">
 <meta name="theme-color" content="#a23a2c">
-<link rel="stylesheet" href="style.css?v=4161">
+<link rel="stylesheet" href="style.css?v=4180">
 </head>
 <body>
 <div id="hud">
   <div class="hud-l"><b id="hudName">—</b><span id="hudRole" class="hud-sub"></span></div>
+  <div class="hud-clock" id="hudClock">
+    <b id="hudYear" class="hud-date">—</b>
+    <span id="hudSpeed" class="hud-spd paused">已暂停</span>
+    <span class="tc" role="group" aria-label="时间控制">
+      <button type="button" data-spd="0" title="暂停（空格键）">暂停</button>
+      <button type="button" data-spd="1" title="1 天/秒">正常</button>
+      <button type="button" data-spd="2" title="5 天/秒">快速</button>
+      <button type="button" data-spd="3" title="20 天/秒">极速</button>
+    </span>
+  </div>
   <div class="hud-m">
-    <span><i>年份</i><b id="hudYear">—</b></span>
     <span><i>年龄</i><b id="hudAge">—</b></span>
     <span><i>阵营</i><b id="hudFac">—</b></span>
     <span><i>银钱</i><b id="hudCash">—</b></span>
-    <span><i>行动</i><b id="hudAp">—</b></span>
+    <span><i>进行中</i><b id="hudJobs">—</b></span>
   </div>
   <div class="hud-r"><b id="hudPlace">—</b></div>
 </div>
@@ -34,7 +43,7 @@
     <h1>山河</h1>
     <p>1840—1972 · 中国近代史人生模拟</p>
   </div>
-  <div class="stamp">V4.16.1 · 历史分支修正与稳定性加固</div>
+  <div class="stamp">V4.18.0 · 实时日历与行动冷却</div>
 </header>
 
 <section id="setup">
@@ -123,9 +132,9 @@
     <div>
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center">
-          <h2 style="margin:0" id="actTitle">年度行动</h2><span class="tag" id="tAp"></span>
+          <h2 style="margin:0" id="actTitle">行动</h2><span class="tag" id="tAp"></span>
         </div>
-        <p class="small muted" style="margin:5px 0 8px"><span id="actHint">每年有固定行动次数。点击事项后选择本年度具体计划，每次选择都会影响个人与时局。</span></p>
+        <p class="small muted" style="margin:5px 0 8px"><span id="actHint">每项事务独立冷却，按游戏日计算；持续行动到期自动结算。暂停时冷却与行动一并停止。</span></p>
         <div class="acts">
           <button class="act" data-act="train"><b>⚔ 操练</b><span>需军职</span></button>
           <button class="act" data-act="study"><b>📚 进修</b><span>积累能力</span></button>
@@ -139,7 +148,6 @@
           <button class="act" data-act="buy"><b>🔫 添置</b><span>110 两 · 涨声望</span></button>
           <button class="act" data-act="fund"><b>🏦 输捐</b><span>50 两入公费</span></button>
         </div>
-        <button class="btn primary block" id="btnAdvance" style="margin-top:9px">结束本年 →</button>
       </div>
 
       <div class="card">
@@ -232,7 +240,7 @@
     </div>
     <div class="card">
       <h2>存档</h2>
-      <div class="small muted" style="margin-bottom:6px">每年自动存一次；三个手动槽可以各存一份人生。</div>
+      <div class="small muted" style="margin-bottom:6px">每月 1 日自动存档（读档后时间处于暂停）；三个手动槽可以各存一份人生。</div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
         <select id="slotSel" style="padding:6px 8px">
           <option value="auto">自动存档</option>
@@ -285,9 +293,9 @@ window.addEventListener('error',function(e){
 });
 window.addEventListener('unhandledrejection',function(e){ __showErr('promise: '+(e.reason&&e.reason.message||e.reason)); });
 </script>
-<script src="china.js?v=4161"></script>
-<script src="world.js?v=4161"></script>
-<script src="app.js?v=4161" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<script src="china.js?v=4180"></script>
+<script src="world.js?v=4180"></script>
+<script src="app.js?v=4180" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
 <div id="tipFloat"></div>
 </body>
 </html>
