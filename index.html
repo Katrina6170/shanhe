@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>山河：1840—1972 · V4.16.0</title>
+<meta name="description" content="山河：1840—1972，中国近代史人生模拟。">
+<meta name="theme-color" content="#a23a2c">
+<link rel="stylesheet" href="style.css?v=4160">
+</head>
+<body>
+<div id="hud">
+  <div class="hud-l"><b id="hudName">—</b><span id="hudRole" class="hud-sub"></span></div>
+  <div class="hud-m">
+    <span><i>年份</i><b id="hudYear">—</b></span>
+    <span><i>年龄</i><b id="hudAge">—</b></span>
+    <span><i>阵营</i><b id="hudFac">—</b></span>
+    <span><i>银钱</i><b id="hudCash">—</b></span>
+    <span><i>行动</i><b id="hudAp">—</b></span>
+  </div>
+  <div class="hud-r"><b id="hudPlace">—</b></div>
+</div>
+<nav id="tabs" style="display:none">
+  <button data-tab="gov" class="on">朝政</button>
+  <button data-tab="ppl">人物</button>
+  <button data-tab="mil">军政</button>
+  <button data-tab="arc">档案</button>
+  <button data-tab="all">全览</button>
+</nav>
+<div class="wrap">
+
+<header class="top">
+  <div class="brand">
+    <h1>山河</h1>
+    <p>1840—1972 · 中国近代史人生模拟</p>
+  </div>
+  <div class="stamp">V4.16.0 · 历史分支修正与稳定性加固</div>
+</header>
+
+<section id="setup">
+  <div class="card">
+    <h2>创建角色</h2>
+    <p class="small muted" style="margin-top:-3px">历史按自身逻辑推进，只有你脱离史实。</p>
+    <div class="grid2">
+      <div class="field"><label>姓名</label><input id="fName" value="沈砚" maxlength="12"></div>
+      <div class="field"><label>出生年份</label><select id="fBirth"></select></div>
+      <div class="field"><label>阵营</label>
+        <select id="fFac">
+          <option value="qing">大清帝国</option>
+          <option value="beiyang">北洋政府 / 北洋军系</option>
+          <option value="kmt">国民党 / 南京国民政府</option>
+          <option value="cpc">中国共产党</option>
+          <option value="local">地方军政势力</option>
+          <option value="civil">民间社会 / 独立人士</option>
+        </select>
+      </div>
+      <div class="field"><label>开始年份</label><select id="fStart"></select></div>
+      <div class="field"><label>初始身份</label>
+        <select id="fRole">
+          <option value="soldier">普通士兵</option><option value="officer">基层军官</option>
+          <option value="official">基层文官</option><option value="student">学生 / 知识分子</option>
+          <option value="merchant">商人 / 实业家</option><option value="activist">革命活动者</option>
+        </select>
+      </div>
+      <div class="field"><label>起始地位</label>
+        <select id="fTier">
+          <option value="low">底层：兵丁 / 学徒 / 小吏</option>
+          <option value="mid">中层：把总 / 主事 / 商会管事</option>
+          <option value="high">高层：提督 / 布政使 / 会长</option>
+          <option value="leader">领袖：坐这位子，替本阵营拿主意</option><option value="throne">帝位 / 元首：生在这个位置（限本阵营已立国）</option>
+        </select>
+      </div>
+      <div class="field"><label>出身</label>
+        <select id="fOrigin">
+          <option>普通家庭</option><option>乡绅家庭</option><option>军人家庭</option>
+          <option>商人家庭</option><option>知识分子家庭</option>
+        </select>
+      </div>
+      <div class="field"><label>出生地</label>
+        <select id="fRegion">
+          <option value="直隶">直隶（京畿）</option>
+          <option value="江浙">江浙（沪上）</option>
+          <option value="两广">两广（广州）</option>
+          <option value="湘鄂">湘鄂（两湖）</option>
+          <option value="四川">四川（巴蜀）</option>
+          <option value="关外">关外（东北）</option>
+        </select>
+      </div>
+      <div class="field"><label>结社 / 会党（可日后加入）</label>
+        <select id="fClub"></select>
+      </div>
+    </div>
+    <p class="small" id="hint" style="margin-top:5px"></p>
+    <button class="btn primary block" id="btnBegin" style="margin-top:8px">进入时代 →</button>
+    <button class="btn block ghost" id="btnRandom" style="margin-top:8px">随机开局（帮你掷一副命）</button>
+    <div class="small muted" id="rollHint" style="margin-top:6px"></div>
+  </div>
+</section>
+
+<section id="game" class="hidden">
+  <div class="card">
+    <div class="hero">
+      <div class="hero-left">
+        <div><span class="tag" id="tFac"></span><span class="tag" id="tAge"></span><span class="tag gold" id="tAlt"></span><span class="tag" id="tCash"></span><span class="tag" id="tFund"></span></div>
+        <h2 id="hName"></h2>
+        <div class="role" id="hRole"></div>
+      </div>
+      <div class="hero-right"><div class="yr" id="hYear"></div></div>
+    </div>
+    <div class="statsrow">
+      <div class="st"><div class="k">综合能力</div><div class="v" id="vSkill">0</div><div class="bar"><i id="bSkill"></i></div><div class="bar exp"><i id="eSkill"></i></div><div class="x" id="xSkill"></div></div>
+      <div class="st"><div class="k">声望</div><div class="v" id="vFame">0</div><div class="bar"><i id="bFame"></i></div><div class="bar exp"><i id="eFame"></i></div><div class="x" id="xFame"></div></div>
+      <div class="st"><div class="k">政治影响</div><div class="v" id="vPower">0</div><div class="bar"><i id="bPower"></i></div><div class="bar exp"><i id="ePower"></i></div><div class="x" id="xPower"></div></div>
+      <div class="st"><div class="k">上级信任</div><div class="v" id="vTrust">0</div><div class="bar"><i id="bTrust"></i></div><div class="bar exp"><i id="eTrust"></i></div><div class="x" id="xTrust"></div></div>
+    </div>
+    <div class="rankstrip">
+      <div class="rl"><span class="rname" id="rName"></span><span class="rnext" id="rNext"></span></div>
+      <div class="bar" style="margin-top:4px"><i id="rBar"></i></div>
+    </div>
+  </div>
+
+  <div class="main">
+    <div>
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center">
+          <h2 style="margin:0" id="actTitle">年度行动</h2><span class="tag" id="tAp"></span>
+        </div>
+        <p class="small muted" style="margin:5px 0 8px"><span id="actHint">每年有固定行动次数。点击事项后选择本年度具体计划，每次选择都会影响个人与时局。</span></p>
+        <div class="acts">
+          <button class="act" data-act="train"><b>⚔ 操练</b><span>需军职</span></button>
+          <button class="act" data-act="study"><b>📚 进修</b><span>积累能力</span></button>
+          <button class="act" data-act="politics"><b>🏛 活动</b><span>需职位/盟友</span></button>
+          <button class="act" data-act="govern"><b>📜 办事</b><span>需文官/地方</span></button>
+          <button class="act" data-act="network"><b>🤝 人脉</b><span>结识一人</span></button>
+        </div>
+        <div class="acts" style="margin-top:6px">
+          <button class="act" data-act="earn"><b>💼 谋生</b><span>赚银钱</span></button>
+          <button class="act" data-act="gift"><b>🎁 打点</b><span>40 两 · 换信任</span></button>
+          <button class="act" data-act="buy"><b>🔫 添置</b><span>110 两 · 涨声望</span></button>
+          <button class="act" data-act="fund"><b>🏦 输捐</b><span>50 两入公费</span></button>
+        </div>
+        <button class="btn primary block" id="btnAdvance" style="margin-top:9px">结束本年 →</button>
+      </div>
+
+      <div class="card">
+        <h2>时代纪事</h2>
+        <div class="evt" id="curEvent">你进入了这个时代。</div>
+      </div>
+
+      <div class="card">
+        <h2>晋升之路</h2>
+        <div id="ladderBox"></div>
+        <button class="btn sm" id="btnPromote" style="margin-top:8px">请求晋升 / 打点升迁</button>
+      </div>
+
+      <div class="card">
+        <h2>组织与结社</h2>
+        <div id="clubBox"></div>
+      </div>
+
+
+      <div class="card" id="cardUnit" style="display:none">
+        <h2>本部</h2>
+        <div id="unitBox"></div>
+      </div>
+
+      <div class="card" id="cardClique" style="display:none">
+        <h2>派系</h2>
+        <div id="cliqueBox"></div>
+      </div>
+
+      <div class="card" id="cardRel" style="display:none">
+        <h2>人际</h2>
+        <div id="relBox"></div>
+      </div>
+
+      <div class="card" id="cardPaper" style="display:none">
+        <h2>年度报纸</h2>
+        <div id="paperBox"></div>
+      </div>
+
+      <div class="card" id="cardWho" style="display:none">
+        <h2>同期人物</h2>
+        <div id="whoBox"></div>
+      </div>
+
+      <div class="card" id="cardBody" style="display:none">
+        <h2>身体</h2>
+        <div id="bodyBox"></div>
+      </div>
+
+      <div class="card" id="cardNatl" style="display:none">
+        <h2>国势</h2>
+        <div id="natlBox"></div>
+      </div>
+
+      <div class="card" id="cardEnd" style="display:none">
+        <h2>结局</h2>
+        <div id="endBox"></div>
+      </div>
+      <div class="card">
+        <h2>历史人物</h2>
+        <p class="small" id="hierarchy" style="margin-top:-3px"></p>
+        <div id="supBox"></div>
+        <div id="peopleBox"></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card">
+        <h2>中国形势图</h2>
+        <div class="powers" id="powers"></div>
+        <div class="mapwrap">
+          <svg class="china" viewBox="0 0 760 480" id="chinaMap" preserveAspectRatio="xMidYMid meet">
+            <g id="worldLayer"></g>
+            <g id="regionLayer"></g>
+          </svg>
+        </div>
+        <div class="legend" id="legend"></div>
+        <p class="small muted" id="worldNote" style="margin:5px 0 0">地图加载中...</p>
+      </div>
+
+
+
+    </div>
+  </div>
+
+  <div class="wide">
+    <div class="card">
+      <h2>个人编年史</h2>
+      <div class="logs" id="logs"></div>
+    </div>
+    <div class="card">
+      <h2>存档</h2>
+      <div class="small muted" style="margin-bottom:6px">每年自动存一次；三个手动槽可以各存一份人生。</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
+        <select id="slotSel" style="padding:6px 8px">
+          <option value="auto">自动存档</option>
+          <option value="1">手动槽 1</option>
+          <option value="2">手动槽 2</option>
+          <option value="3">手动槽 3</option>
+        </select>
+        <button class="btn sm" id="btnSave">存入此槽</button>
+        <button class="btn sm" id="btnLoad">读取此槽</button>
+        <button class="btn sm" id="btnDel">删除此槽</button>
+      </div>
+      <div style="display:flex;gap:6px;margin-top:6px;flex-wrap:wrap">
+        <button class="btn sm" id="btnExport">导出文件</button>
+        <button class="btn sm" id="btnImport">导入文件</button>
+        <input type="file" id="fileImport" accept=".json,application/json" style="display:none">
+        <button class="btn sm" id="btnReset">重开</button>
+      </div>
+      <div class="small" id="slotInfo" style="margin-top:6px;color:#8a8175"></div>
+      <span class="small muted" id="saveMsg"></span>
+    </div>
+  </div>
+
+  <div class="card"><p class="small muted" style="margin:0">原型作品。省界数据来自阿里云 DataV，人物关系与军事为模拟设定。</p></div>
+</section>
+
+<div class="footer">SHANHE · 1840—1972</div>
+</div>
+
+<div class="mask hidden" id="mask">
+  <div class="dialog">
+    <div class="tag" id="dlgTag"></div>
+    <h2 id="dlgTitle"></h2>
+    <p class="small muted" id="dlgDesc"></p>
+    <div id="dlgBody"></div>
+  </div>
+</div>
+
+<script>
+window.__lastErr=null;
+function __showErr(msg){
+ var b=document.getElementById('errBar');
+ if(!b){ b=document.createElement('div'); b.id='errBar';
+  b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:120;background:#7a2b1e;color:#fff;padding:8px 12px;font:12px/1.5 monospace;max-height:30vh;overflow:auto';
+  document.body.appendChild(b); }
+ b.textContent='出错了：'+msg;
+}
+window.addEventListener('error',function(e){
+ window.__lastErr=(e.message||'')+' @'+(e.filename||'').split('/').pop()+':'+(e.lineno||0);
+ __showErr(window.__lastErr);
+});
+window.addEventListener('unhandledrejection',function(e){ __showErr('promise: '+(e.reason&&e.reason.message||e.reason)); });
+</script>
+<script src="china.js?v=4160"></script>
+<script src="world.js?v=4160"></script>
+<script src="app.js?v=4160" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<div id="tipFloat"></div>
+</body>
+</html>
