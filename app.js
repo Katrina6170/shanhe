@@ -2735,7 +2735,7 @@ function openPolicy(){
 var _tickV25=window.__yearTick;
 window.__yearTick=function(){
  if(_tickV25) try{_tickV25();}catch(e){}
- if(s&&s.isLeader&&!s.dead) try{openPolicy();}catch(e){}
+ if(s&&s.isLeader&&!s.dead) try{ dlgOpen('policy',s.year); }catch(e){}   /* V4.19：进弹窗队列，不再覆盖别的弹窗 */
 };
 
 /* ---------- 性能：地图只在必要时重画 ---------- */
@@ -2755,22 +2755,28 @@ document.addEventListener('DOMContentLoaded',function(){
 if($('btnRandom')) $('btnRandom').onclick=randomStart;
 
 /* ---------- V2.6：1949 的天下大势 ---------- */
+/* V4.19：天下大势弹窗进入弹窗队列（年初常与定国策、年度报告同时出现，过去会互相覆盖） */
+function verdictDlg(){
+ if(!s||s.dead) return false;
+ var v=verdict();
+ $('dlgTag').textContent='天下大势 · '+s.year+'年';
+ $('dlgTitle').textContent=v.t.replace('结局 · ','');
+ $('dlgDesc').textContent=v.d;
+ var body=$('dlgBody'); body.innerHTML='';
+ var b=document.createElement('button'); b.className='choice';
+ b.innerHTML='<b>看下去</b><div class="sub">历史没有结束，你还在这条线上。</div>';
+ b.onclick=function(){ $('mask').classList.add('hidden'); render(); persist(); };
+ body.appendChild(b);
+ $('mask').classList.remove('hidden');
+ return true;
+}
 var _tickV26=window.__yearTick;
 window.__yearTick=function(){
  if(_tickV26) try{_tickV26();}catch(e){}
  if(!s||s.dead) return;
  if(!s.verdictShown && s.year>=1949){
   s.verdictShown=1;
-  var v=verdict();
-  $('dlgTag').textContent='天下大势 · '+s.year+'年';
-  $('dlgTitle').textContent=v.t.replace('结局 · ','');
-  $('dlgDesc').textContent=v.d;
-  var body=$('dlgBody'); body.innerHTML='';
-  var b=document.createElement('button'); b.className='choice';
-  b.innerHTML='<b>看下去</b><div class="sub">历史没有结束，你还在这条线上。</div>';
-  b.onclick=function(){ $('mask').classList.add('hidden'); render(); persist(); };
-  body.appendChild(b);
-  $('mask').classList.remove('hidden');
+  try{ dlgOpen('verdict',s.year); }catch(e){}
  }
 };
 
@@ -4614,6 +4620,10 @@ function ensureAltHistory(){
  ['stateStructure','executive','politicalOrder'].forEach(function(k){if(!s.constitution[k])s.constitution[k]=({stateStructure:'unitary',executive:'parliamentary',politicalOrder:'multiparty'})[k];});
  if(!world.altPath)world.altPath=null;
  if(!world.altHistory)world.altHistory={};
+ /* V4.19：1948 年之后开局（或读入未经 1948 年判定的存档），战后走向按史实落定为中共取得全国政权 */
+ if(!s.altHistory.resolved&&!world.altPath&&s.year>1948){
+  s.altHistory.resolved=true;s.altHistory.path='cpc_victory';s.altHistory.resolvedYear=s.year;s.altHistory.auto=1;world.altPath='cpc_victory';
+ }
 }
 function altDelta(key,n){
  ensureAltHistory();
@@ -5672,7 +5682,7 @@ setTimeout(installConstitutionEntry,500);
    {t:'向上级争取减免征粮',d:'减轻灾区征收压力。',fac:['kmt','local','cpc'],affinity:'trust',req:{trust:48},risk:1,run:function(x,w){if(w){x.fame+=5;x.trust+=2;return '上级同意局部调整征粮安排。';}x.trust-=3;return '请求未获批准。';}},
    {t:'组织民间互助与医疗救护',d:'发动社会力量救助灾民。',fac:['civil','local','cpc'],affinity:'fame',req:{fame:30},run:function(x){x.fame+=4;x.skill+=2;return '民间互助网络缓解了部分灾情。';}}
   ]},
-  {id:'leap58',y:1958,t:'大跃进与人民公社化',who:['cpc','local','civil'],d:'高指标与大规模组织变动迅速展开，基层生产、粮食征购和公共生活受到深刻影响。',opts:[
+  {id:'leap58',y:1958,t:'人民公社化',who:['cpc','local','civil'],d:'北戴河会议通过在农村建立人民公社的决议，公社化运动迅速铺开。高指标与大规模组织变动交织，基层生产、粮食征购和公共生活受到深刻影响。',opts:[
    {t:'如实上报产量与基层困难',d:'避免虚报浮夸，反映实际情况。',fac:['cpc','local'],affinity:'trust',req:{trust:52,skill:42},risk:1,run:function(x,w){if(w){x.fame+=5;x.trust+=3;return '基层真实情况得到部分重视。';}x.trust-=5;return '你的报告被认为消极，受到批评。';}},
    {t:'推动因地制宜安排生产',d:'减少一刀切，保留生产弹性。',fac:['cpc','local'],affinity:'skill',req:{skill:48,power:32},run:function(x){x.skill+=4;x.fame+=3;return '部分生产安排得以调整。';}},
    {t:'组织公共食堂与集体生产',d:'积极执行新的组织方式。',fac:['cpc','local'],affinity:'trust',req:{trust:38},run:function(x){x.trust+=3;x.power+=2;return '你参与了基层组织调整，执行效率有所提高，但资源压力也在积累。';}},
@@ -5692,9 +5702,12 @@ setTimeout(installConstitutionEntry,500);
   ]}
  );
  // 同一年若原版已有事件（如1958、1966、1971），把新增选项合并进去，避免年份匹配时被前一个事件遮挡。
+ /* V4.19：只合并同一 id 的事件（1966、1971 原版与扩充版同名）。不同 id 的同年事件各自按日期触发：
+    1958 年的大跃进（5-05）与人民公社化（8-29）原先被并成一个，人民公社化的选项提前在 5 月一并弹出，
+    V4.11/V4.12 挂在 leap58 上的长期因果与身份选项也因此失效。 */
  var yearMap={};
  EVENTS=EVENTS.filter(function(ev){
-  var y=Number(ev.y);
+  var y=String(ev.id||ev.y);
   if(!yearMap[y]){yearMap[y]=ev;return true;}
   var base=yearMap[y];base.opts=(base.opts||[]).concat(ev.opts||[]);
   base.who=Array.from(new Set((base.who||[]).concat(ev.who||[])));
@@ -7681,7 +7694,7 @@ window.__CAL.wait=waitStart; window.__CAL.waitOptions=waitOptions; window.__CAL.
    - 动效只用 DESIGN.md 的令牌；prefers-reduced-motion 下由样式表统一降为 0ms。 */
 var PHOTOS={"opium":{"f":"img/opium.jpg","d":"1841 年 1 月，东印度公司铁甲蒸汽船“复仇女神号”与英舰小艇在穿鼻洋击毁清军水师战船。","y":"1843 年绘","a":"爱德华·邓肯（Edward Duncan）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADestroying_Chinese_war_junks%2C_by_E._Duncan_%281843%29.jpg"},"nanjing42":{"f":"img/nanjing42.jpg","d":"1842 年 8 月，《南京条约》在英舰“皋华丽号”上签字用印。","y":"1846 年刊印","a":"约翰·普拉特绘，约翰·伯内特刻版","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThe_Signing_of_the_Treaty_of_Nanking.jpg"},"taiping":{"f":"img/taiping.jpg","d":"湘军攻复安庆。安庆之战是太平天国由盛转衰的转折。","y":"1886 年绘","a":"吴友如","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARegaining_the_Provincial_City_Anqing2.jpg"},"secondopium56":{"f":"img/secondopium56.jpg","d":"1860 年英法联军攻占大沽炮台之后。炮台内，清军守兵的遗体还横在阵地上。","y":"1860 年","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAfter_the_Capture_of_the_Taku_Forts_1860.jpg","p":"50% 55%"},"ziqiang":{"f":"img/ziqiang.jpg","d":"江南制造局搬运火炮。洋务运动时期最大的军工厂。原照为 1900 年前所摄，此为 2009 年翻拍。","y":"1900 年前","a":"原摄影者不详","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AGun_transportation_at_Jiangnan_Arsenal.jpg"},"taipingfall64":{"f":"img/taipingfall64.jpg","d":"清军攻破天京（南京）。太平天国自此覆亡。","y":"19 世纪","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThird_Battle_of_Nanking.jpg"},"saihai75":{"f":"img/saihai75.jpg","d":"清军与回军在渭河作战。西北战事是塞防之议的背景。","y":"1886—1890 年间绘","a":"庆宽","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_at_the_Wei_River_%28Weihe%29.jpg"},"jiawu":{"f":"img/jiawu.jpg","d":"北洋水师旗舰“定远”号。参加黄海海战，1895 年在威海卫被鱼雷击伤后自毁。","y":"1884—1895 年间","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADingyuan_%28ship%2C_1884%29_-_NH_1926_-_cropped.jpg"},"wuxu":{"f":"img/wuxu.jpg","d":"康有为像。戊戌变法的主要推动者，变法失败后流亡海外。","y":"年份不详","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AKang-youwei2-large.jpg","p":"50% 22%"},"boxer":{"f":"img/boxer.jpg","d":"八国联军中的英属印度第十六孟加拉骑兵在北京天坛。","y":"1900 年","a":"佚名（理查森爵士相册）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIndian_troops_at_Temple_of_Heaven_Peking_1900.jpg"},"boxer01":{"f":"img/boxer01.jpg","d":"《辛丑条约》签字现场。条约规定赔款四亿五千万两。","y":"1901 年 9 月 7 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E3%80%8A%E8%BE%9B%E4%B8%91%E6%9D%A1%E7%BA%A6%E3%80%8B%E7%AD%BE%E5%AD%97%E6%97%B6%E7%9A%84%E6%83%85%E6%99%AF.jpg"},"abolish_exam05":{"f":"img/abolish_exam05.jpg","d":"南京江南贡院的号舍。考生在这样的隔间里连考数日，1905 年科举停废后空置。今景。","y":"2001 年 4 月摄","a":"Dr. Meierhofer","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3APr%C3%BCfungszellen-Nanking.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 85%"},"xinhai":{"f":"img/xinhai.jpg","d":"武昌起义中的革命军士兵。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_soldiers_at_Wuchang.jpg"},"minguo":{"f":"img/minguo.jpg","d":"1912 年 1 月 1 日，孙中山就任临时大总统后与总统府职员合影。","y":"1912 年 1 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1912%E5%B9%B41%E6%9C%881%E6%97%A5%EF%BC%8C%E5%AD%99%E4%B8%AD%E5%B1%B1%E5%B0%B1%E8%81%8C%E4%B8%AD%E5%8D%8E%E6%B0%91%E5%9B%BD%E4%B8%B4%E6%97%B6%E5%A4%A7%E6%80%BB%E7%BB%9F%E5%90%8E%E4%B8%8E%E6%80%BB%E7%BB%9F%E5%BA%9C%E8%81%8C%E5%91%98%E5%90%88%E5%BD%B1.jpg","p":"50% 35%"},"huguo15":{"f":"img/huguo15.jpg","d":"蔡锷像。1915 年底他在云南起兵讨袁，护国战争由此开始。","y":"1916 年以前","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACai_E.jpg","p":"50% 15%"},"warlord16":{"f":"img/warlord16.jpg","d":"袁世凯戎装像。他 1916 年 6 月死后，北洋分裂为各派军阀。","y":"约 1912 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AYuan_Shikai_in_uniform.jpg","p":"50% 20%"},"may4":{"f":"img/may4.jpg","d":"1919 年 5 月 4 日，北京十三所学校约三千名学生在天安门前集会，反对巴黎和会的山东决议。","y":"1919 年 5 月 4 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_protestors_march_against_the_Treaty_of_Versailles_%28May_4%2C_1919%29.jpg"},"beifa":{"f":"img/beifa.jpg","d":"北伐战争图片拼合：蒋介石检阅国民革命军、北上行军的部队、炮兵作战等。原照摄于 1926—1928 年，2012 年拼合。","y":"1926—1928 年","a":"Futuretrillionaire（拼合）","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3ANorthern_Expedition_collage.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 35%"},"split":{"f":"img/split.jpg","d":"“清党”中被捕押走的共产党人。","y":"1927 年 4 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACommunist_purge.jpg"},"northeast28":{"f":"img/northeast28.jpg","d":"张学良。这一年年底，他宣布东北易帜，服从南京国民政府。","y":"1928 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_1928.jpg","p":"50% 8%"},"918":{"f":"img/918.jpg","d":"日军骑兵开进沈阳。","y":"1931 年 9 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMukden_1931_japan_shenyang.jpg"},"changzheng":{"f":"img/changzheng.jpg","d":"红军干部向长征后的队伍讲话。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALong-march.jpg"},"zunyi35":{"f":"img/zunyi35.jpg","d":"遵义会议会址。1935 年 1 月，中共中央政治局在此开会，调整了军事领导。今景。","y":"2005 年 8 月 8 日摄","a":"小小新手","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3AZunyiMeeting.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩"},"xian":{"f":"img/xian.jpg","d":"事变前两个月的合影：张学良（左）、杨虎城（中）、蒋介石（右）。","y":"1936 年 10 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_Yang_Hucheng_and_Chiang_Kai-shek.jpg","p":"50% 35%"},"q7":{"f":"img/q7.jpg","d":"第二十九军在前线作战。","y":"1937 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AArmy_29_Fighting_1937.jpg"},"wuhan":{"f":"img/wuhan.jpg","d":"武汉外围的中国军队机枪阵地。","y":"1938 年","a":"唐古樵","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_1938.jpg"},"changsha39":{"f":"img/changsha39.jpg","d":"第一次长沙会战中的日军士兵。","y":"1939 年 9 月","a":"日本陆军","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIJA%2C_Battle_of_Changsha%2C_China%2C_September_1939.jpg","p":"50% 40%"},"baituan":{"f":"img/baituan.jpg","d":"八路军攻占娘子关。","y":"1940 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHundred_Regiments_Offensive_1940.jpg"},"newfourth41":{"f":"img/newfourth41.jpg","d":"新四军政治部职员，手执纸烟者为部长林植夫。","y":"1938 年刊","a":"《大美画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E6%96%B0%E5%9B%9B%E5%86%9B%E6%94%BF%E6%B2%BB%E9%83%A8%E8%81%8C%E5%91%98.png","p":"50% 35%"},"henan42":{"f":"img/henan42.jpg","d":"河南大饥荒。饿极的灾民啃食树皮。","y":"1943 年","a":"哈里森·福尔曼（Harrison Forman）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAgsphoto_11239_full.jpg","p":"50% 30%"},"ichigo44":{"f":"img/ichigo44.jpg","d":"日军在粤汉铁路沿线冲锋。豫湘桂战役中国军队大溃退。","y":"1944 年 7 月","a":"《读卖新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AJapanese_troops_performing_a_close_combat_attack_on_Y%C3%BCeh-Han_Railroad.jpg"},"1945":{"f":"img/1945.jpg","d":"南京受降：中国战区受降主官何应钦在日军投降书上签字。","y":"1945 年 9 月 9 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHe_Yinqin_signs_1945.jpg"},"civilwar46":{"f":"img/civilwar46.jpg","d":"四平战役中的共产党军队阵地。","y":"1946 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_of_Siping03.jpg"},"constitution47":{"f":"img/constitution47.jpg","d":"1946 年 12 月 25 日国民大会通过的《中华民国宪法》，1947 年 1 月 1 日公布。","y":"1946 年","a":"国史馆","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1946_National_Assembly_Constitution.jpg","p":"50% 12%"},"campaign48":{"f":"img/campaign48.jpg","d":"淮海战役中，解放军华东坦克大队配合步兵进攻。","y":"1948 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLAHuaihai.jpg"},"founding49":{"f":"img/founding49.jpg","d":"开国大典，毛泽东在天安门城楼宣告中华人民共和国中央人民政府成立。","y":"1949 年 10 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMao_Proclaiming_New_China.JPG","p":"50% 35%"},"korean50":{"f":"img/korean50.jpg","d":"长津湖战役中，美军陆战一师的车队穿过志愿军防线突围。","y":"1950 年 12 月","a":"彼得·麦克唐纳（美国海军陆战队）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChosin.jpg"},"plan53":{"f":"img/plan53.jpg","d":"长春第一汽车制造厂职工欢庆第一批解放牌汽车出厂。","y":"1956 年","a":"袁苓","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_people%27s_pride.jpg","p":"50% 40%"},"greatleap58":{"f":"img/greatleap58.jpg","d":"大炼钢铁的土高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace2.jpg","p":"50% 40%"},"cultural66":{"f":"img/cultural66.jpg","d":"天安门广场上等待接见的红卫兵。","y":"1966 年 9 月 15 日","a":"孟昭瑞","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARed_Guards_in_Tian%27anmen_Square.jpg","p":"50% 55%"},"era_qing":{"f":"img/era_qing.jpg","d":"广州，英国领事馆的本地卫队，远处是六榕寺花塔。","y":"1871 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATARTAR_SOLDIERS.jpg","c":"广州的领事馆卫队"},"era_qing_city":{"f":"img/era_qing_city.jpg","d":"广州西关浆栏街，沿街多是药材铺。","y":"约 1873 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APHYSIC_STREET%2C_CANTON.jpg","c":"广州浆栏街"},"era_republic":{"f":"img/era_republic.jpg","d":"上海南京路。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AShanghai_Nanking_Road_1930s.jpeg","c":"上海南京路"},"era_war":{"f":"img/era_war.jpg","d":"台儿庄战役中的巷战。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuang.jpg","c":"台儿庄巷战"},"era_newchina":{"f":"img/era_newchina.jpg","d":"中苏专家在建设中的武汉长江大桥上。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg","c":"建设中的武汉长江大桥"},"ziqiang_2":{"f":"img/ziqiang_2.jpg","d":"福州船政局全景，左宗棠、沈葆桢创办的近代造船厂。","y":"1898 年前","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AFOOCHOW_ARSENAL.jpg"},"ziqiang_3":{"f":"img/ziqiang_3.jpg","d":"李鸿章，洋务运动的主要主持者。此照摄于他去世的那一年。","y":"1901 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALi_Hongzhang_1901.jpg","p":"50% 12%"},"taiping_2":{"f":"img/taiping_2.jpg","d":"曾国藩像。他组建湘军，主持对太平天国的战事。","y":"1871 年 3 月","a":"吴嘉善","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZeng_Guofan_Photograph.jpg","p":"50% 30%"},"jiawu_2":{"f":"img/jiawu_2.jpg","d":"瑞典讽刺漫画：赴日议和的李鸿章。","y":"1895 年 3 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APolitical_cartoon_of_Li_Hongzhang_1895.png","p":"50% 50%"},"xinhai_2":{"f":"img/xinhai_2.jpg","d":"汉阳的革命军总司令部（一说在古琴台）。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_army_headquarters_at_Hanyang.jpg","p":"50% 40%"},"warlord16_2":{"f":"img/warlord16_2.jpg","d":"北洋陆军操练。","y":"1910 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMilitary_training_of_the_Beiyang_Army.jpg"},"q7_3":{"f":"img/q7_3.jpg","d":"南京，魏特琳（Minnie Vautrin）和她在金陵女子文理学院收容的难民。","y":"1937 年","a":"侵华日军南京大屠杀遇难同胞纪念馆藏","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMinnie_Vautrin_helped_the_refugees_in_1937.jpg","p":"50% 45%"},"wuhan_2":{"f":"img/wuhan_2.jpg","d":"1938 年 6 月黄河花园口决堤，以水阻敌，豫皖苏大片村庄被淹。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1938_Yellow_River_flood.jpg"},"wuhan_3":{"f":"img/wuhan_3.jpg","d":"台儿庄附近，中国士兵伏在被毁的日军卡车旁，前景是一匹死马。","y":"1938 年 4 月","a":"罗伯特·卡帕（Robert Capa）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuangBattlephoto.jpg"},"henan42_2":{"f":"img/henan42_2.jpg","d":"1938 年黄河决堤后的难民群。原为日方宣传照片，原题称难民“为日军所救”。","y":"1938 年","a":"佚名（日方宣传照）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARefugees_of_Yellow_River_Flood.JPG"},"campaign48_2":{"f":"img/campaign48_2.jpg","d":"解放军进入上海南京路。","y":"1949 年 5 月 25 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLA_Troops_entered_to_Nanjing_Road%2C_Shanghai.jpg"},"plan53_2":{"f":"img/plan53_2.jpg","d":"中苏专家在建设中的武汉长江大桥上。大桥是“一五”计划的重点工程。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg"},"transformation56":{"f":"img/transformation56.jpg","d":"建设中的武汉长江大桥。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_Yangtze_River_Bridge_in_construction.jpg"},"leap58":{"f":"img/leap58.jpg","d":"土法炼钢的小高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace4.jpg","p":"50% 55%"},"boxer_2":{"f":"img/boxer_2.jpg","d":"天津美国领事馆前的美国海军陆战队，随后随西摩尔联军北上。","y":"1900 年","a":"肯扬·考克斯（Kenyon Cox）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AUS_Marines_at_American_Consulate%2C_Tianjin%2C_1900_%28CHANDLESS_0%29.jpeg"},"un71":{"f":"img/un71.jpg","d":"尼克松抵达北京，与周恩来握手。中国恢复联合国席位后不到四个月。","y":"1972 年 2 月 21 日","a":"白宫摄影办公室","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:President_Richard_Nixon_and_Premier_Chou_En-Lai_Shake_Hands_at_the_Nixons%27_Arrival_in_Peking,_China_-_DPLA_-_315dbcc0e8b46e1bc678fde12bef9eb8.jpg"},"secondopium56_2":{"f":"img/secondopium56_2.jpg","d":"大沽北炮台一角，攻破后即刻拍摄。阵亡的守兵倒在炮位与壕沟里。","y":"1860 年 8 月 21 日","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Felice_Beato_-_Interior_of_the_Angle_of_Taku_North_Fort_Immediately_After_Its_Capture_by_Storm_-_Google_Art_Project.jpg","p":"50% 60%"},"era_war_2":{"f":"img/era_war_2.jpg","d":"日军轰炸机轰炸重庆。","y":"1940 年 6 月 16 日","a":"《朝日新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E8%BD%9F%E7%82%B8%E9%87%8D%E6%85%B6_%28cropped%29.jpg","c":"日机轰炸重庆"}};
 /* 同一年的事件在 V4.10 段被合并（大跃进与人民公社化 → 大跃进），照片跟着并过去 */
-var PH_ALIAS={greatleap58:['leap58']};
+var PH_ALIAS={};   /* V4.19：人民公社化（leap58）恢复为独立事件，照片各归各的 */
 var PH={title:null,list:[],i:0,bad:{},els:null,era:'',lastDate:'',obs:null,galSig:'',galAll:false};
 function phList(id){
  var a=[]; if(!id) return a; id=String(id);
@@ -7933,6 +7946,763 @@ render=function(){
  setTimeout(bind,0); document.addEventListener('DOMContentLoaded',bind);
 })();
 window.__PH={events:function(){ return EVENTS.map(function(e){ return {id:e.id,y:e.y,t:e.t}; }); },photos:PHOTOS,list:phList,eraOf:phEraOf,view:phView,go:function(i){ phGo(i); },state:PH,gallery:phGalleryRender,clear:phClear};
+
+/* ================= V4.19：世界自主运行——国家 AI、动态外交、国际关系 =================
+   - 六个列强（英、法、俄/苏、德、日、美）各有国力、经济、军事、国内稳定、政体、性格与时代目标。
+   - 国家 AI 挂在统一的日推进流程上：每月 1 日（calMonthTick）评估一次局势，每国至多作一项决策。
+     s.intl.last 记下已决策的月份（年*12+月-1），先落标记再计算：同一个月绝不重复，跨多月静待时每月各一次。
+   - 史实锚点（战争、同盟、协约、条约、政体更迭）按日期在日推进中发生，并给相关两国的关系设上下限（锁）；
+     AI 只能在锁的范围内演化，不会与史实冲突得离谱。战后（1949—）涉华锚点只在“中共胜利”路线下生效。
+   - 与中国的关系即 s.__powers[...].r（军政页“列强”同一套数字）；涉华动向会改变国势，并按玩家身份产生后果。
+   - 不做 AI 自主宣战与战争结算（留给 V4.20）：紧张度 s.intl.t 与 window.__INTL.warRisk() 是接口。 */
+var INTL_KEYS=['br','fr','ru','de','jp','us'];
+var INTL_ALL=['br','cn','de','fr','jp','ru','us'];
+var INTL_POW={br:'英吉利',ru:'沙俄',jp:'日本',fr:'法兰西',de:'德意志',us:'美利坚'};
+var INTL_PERF={n:0,total:0,max:0};
+function intlNowMs(){ try{ if(typeof performance!=='undefined'&&performance.now) return performance.now(); }catch(e){} return Date.now(); }
+function intlPK(a,b){ return a<b?a+'|'+b:b+'|'+a; }
+function intlCl(v,lo,hi){ v=+v; if(!isFinite(v)) v=lo; return Math.max(lo,Math.min(hi,Math.round(v*10)/10)); }
+function intlPath(){ return (world&&world.altPath)||(s&&s.altHistory&&s.altHistory.path)||null; }
+function intlPRC(){ var p=intlPath(); return !p||p==='cpc_victory'; }
+var INTL_PRC_ORD=calOrd(1949,10,1);
+function intlCnName(ord){
+ var o=calFromOrd(ord), y=o.y;
+ if(y<1912) return '清廷';
+ if(y<1928) return '北京政府';
+ if(ord<INTL_PRC_ORD) return '国民政府';
+ return intlPRC()?'中国政府':'中华民国政府';
+}
+function intlName(k,ord){
+ if(ord===undefined) ord=s&&s.cal?s.cal.ord:0;
+ var y=calFromOrd(ord).y;
+ if(k==='br') return '英国'; if(k==='fr') return '法国'; if(k==='us') return '美国'; if(k==='jp') return '日本';
+ if(k==='ru') return y<1917?'俄国':(y<1922?'苏俄':'苏联');
+ if(k==='de') return y<1871?'普鲁士':(y<1945?'德国':(y<1949?'德国占领区':'西德'));
+ if(k==='cn') return intlCnName(ord);
+ return k;
+}
+/* 政体：[起始年, 名称, 意识形态组]；组用于同类亲近、异类疏远 */
+var INTL_REGIME={
+ br:[[1840,'君主立宪','lib']],
+ fr:[[1840,'七月王朝','mon'],[1848,'第二共和国','lib'],[1852,'第二帝国','mon'],[1870,'第三共和国','lib'],[1940,'维希政权','fasc'],[1944,'临时政府','lib'],[1946,'第四共和国','lib'],[1958,'第五共和国','lib']],
+ ru:[[1840,'沙皇专制','mon'],[1917,'苏维埃政权','comm']],
+ de:[[1840,'普鲁士王国','mon'],[1871,'德意志帝国','mon'],[1919,'魏玛共和国','lib'],[1933,'纳粹独裁','fasc'],[1945,'盟国占领','none'],[1949,'联邦共和国','lib']],
+ jp:[[1840,'幕府锁国','mon'],[1868,'明治政府','mon'],[1890,'帝国议会','mon'],[1932,'军部专政','fasc'],[1945,'盟军占领','none'],[1952,'议会民主','lib']],
+ us:[[1840,'联邦共和国','lib']]
+};
+function intlRegime(k,y){
+ if(k==='cn'){ if(y<1912) return ['帝制','mon']; if(y<1928) return ['北京政府','lib']; if(y<1950||!intlPRC()) return ['国民政府','mon']; return ['人民共和国','comm']; }
+ var a=INTL_REGIME[k]||[[0,'—','none']], r=a[0];
+ for(var i=0;i<a.length;i++){ if(y>=a[i][0]) r=a[i]; }
+ return [r[1],r[2]];
+}
+/* 国力参考曲线（游戏估算，0—100），AI 的扩军、改革、制裁在其上下浮动 */
+var INTL_REF={
+ br:[[1840,95],[1870,92],[1900,85],[1914,80],[1918,75],[1939,65],[1945,55],[1950,50],[1972,42]],
+ fr:[[1840,75],[1870,72],[1871,60],[1914,65],[1918,58],[1939,55],[1940,15],[1944,30],[1950,45],[1972,50]],
+ ru:[[1840,70],[1855,60],[1880,65],[1904,66],[1906,52],[1917,30],[1922,35],[1930,55],[1941,60],[1945,80],[1955,85],[1972,90]],
+ de:[[1840,45],[1866,58],[1871,75],[1900,82],[1914,85],[1918,45],[1925,45],[1933,50],[1939,80],[1942,85],[1945,5],[1949,20],[1955,40],[1972,55]],
+ jp:[[1840,20],[1868,22],[1895,45],[1905,58],[1920,62],[1937,70],[1941,72],[1945,15],[1952,25],[1960,40],[1972,60]],
+ us:[[1840,35],[1865,45],[1898,60],[1918,80],[1929,82],[1941,90],[1945,100],[1972,95]]
+};
+function intlCurve(pts,y){
+ if(y<=pts[0][0]) return pts[0][1];
+ for(var i=1;i<pts.length;i++){ if(y<=pts[i][0]){ var a=pts[i-1],b=pts[i]; return a[1]+(b[1]-a[1])*(y-a[0])/(b[0]-a[0]); } }
+ return pts[pts.length-1][1];
+}
+function intlStep(pts,y){ var v=pts[0][1]; for(var i=0;i<pts.length;i++){ if(y>=pts[i][0]) v=pts[i][1]; } return v; }
+/* 性格：进取 agg、重商 trade、务实 prag、活跃 act（再叠加时代修正与每局的随机偏差） */
+var INTL_PERS={br:{agg:50,trade:85,prag:75,act:60},fr:{agg:55,trade:60,prag:55,act:50},ru:{agg:70,trade:30,prag:45,act:50},
+ de:{agg:60,trade:60,prag:60,act:45},jp:{agg:40,trade:45,prag:60,act:30},us:{agg:30,trade:85,prag:70,act:40}};
+function intlPersAdj(k,y){
+ var a={agg:0,trade:0,prag:0,act:0};
+ if(k==='jp'){ if(y<1854){a.act=-25;a.agg=-25;} else if(y>=1868&&y<1931){a.agg=20;a.act=20;} else if(y>=1931&&y<1945){a.agg=45;a.act=25;a.prag=-20;} else if(y>=1952){a.agg=-25;a.trade=25;a.act=10;} }
+ if(k==='de'){ if(y>=1933&&y<1945){a.agg=35;a.prag=-25;a.act=15;} else if(y>=1949){a.agg=-30;a.trade=15;} }
+ if(k==='ru'){ if(y>=1917&&y<1922){a.act=-30;} else if(y>=1945){a.agg=5;a.act=15;} }
+ if(k==='us'){ if(y>=1898&&y<1919){a.agg=10;a.act=15;} else if(y>=1941){a.agg=15;a.act=30;} }
+ if(k==='fr'&&y>=1940&&y<1944) a.act=-40;
+ return a;
+}
+function intlPers(k,y){
+ var b=INTL_PERS[k], adj=intlPersAdj(k,y), pv=(s&&s.intl&&s.intl.n[k]&&s.intl.n[k].pv)||{}, o={};
+ ['agg','trade','prag','act'].forEach(function(f){ o[f]=Math.max(0,Math.min(100,b[f]+adj[f]+(+pv[f]||0))); });
+ return o;
+}
+/* 不能自主行动的时期：战败占领、维希、锁国（只做内政） */
+function intlActive(k,ord){
+ var y=calFromOrd(ord).y;
+ if(k==='de'&&ord>=calOrd(1945,5,8)&&ord<calOrd(1949,9,21)) return false;
+ if(k==='jp'&&ord>=calOrd(1945,9,2)&&ord<calOrd(1952,4,28)) return false;
+ if(k==='fr'&&ord>=calOrd(1940,6,22)&&ord<calOrd(1944,8,25)) return false;
+ if(k==='ru'&&ord>=calOrd(1917,11,7)&&ord<calOrd(1921,3,1)) return false;
+ return true;
+}
+function intlForeign(k,ord){ return !(k==='jp'&&calFromOrd(ord).y<1854)&&intlActive(k,ord); }
+/* 时代目标：[起, 止, 说明, 类别, 对象] */
+var INTL_GOALS={
+ br:[[1840,1900,'维护在华通商与海上优势','trade','cn'],[1900,1919,'维持均势，防范德国','security','de'],[1919,1939,'守住帝国与在华利益','trade','cn'],[1939,1946,'击败轴心国','security','de'],[1946,1973,'战后重建，依托美国','security','ru']],
+ fr:[[1840,1871,'经营安南，扩大在华商务与传教','expand','cn'],[1871,1914,'对德复仇，收回阿尔萨斯—洛林','revanche','de'],[1914,1919,'击败德国','security','de'],[1919,1940,'防范德国复兴','security','de'],[1940,1946,'光复本土','security','de'],[1946,1973,'重建与独立外交','trade','us']],
+ ru:[[1840,1905,'向远东扩张：黑龙江与满洲','expand','cn'],[1905,1917,'巩固远东，防范日本','security','jp'],[1917,1941,'巩固政权，防范资本主义包围','ideology','de'],[1941,1946,'击败德国','security','de'],[1946,1973,'与美国争衡','ideology','us']],
+ de:[[1840,1871,'统一德意志','expand','fr'],[1871,1897,'维持大陆均势','security','fr'],[1897,1914,'推行“世界政策”，经营胶州湾','expand','cn'],[1914,1919,'赢得大战','security','fr'],[1919,1933,'修改和约，恢复国力','revanche','fr'],[1933,1945,'扩张与复仇','expand','ru'],[1945,1973,'复兴与西方一体化','trade','us']],
+ jp:[[1840,1854,'锁国自守','security','br'],[1854,1868,'应对开国危机','security','us'],[1868,1895,'富国强兵，经略朝鲜','expand','cn'],[1895,1931,'经营满蒙','expand','cn'],[1931,1945,'独霸东亚','expand','cn'],[1945,1952,'占领下的重建','trade','us'],[1952,1973,'经济复兴','trade','us']],
+ us:[[1840,1899,'通商与传教','trade','cn'],[1899,1941,'在华“门户开放”','trade','cn'],[1941,1946,'击败轴心国','security','jp'],[1946,1973,'遏制共产主义','ideology','ru']]
+};
+function intlGoal(k,y){ var g=INTL_GOALS[k]||[]; for(var i=0;i<g.length;i++){ if(y>=g[i][0]&&y<g[i][1]) return g[i]; } return g[g.length-1]||[0,0,'—','trade','cn']; }
+/* 两国关系的时代基调（史实背景，0—100）；AI 的决策在其附近演化 */
+var INTL_CLIMATE={
+ 'br|fr':[[1840,45],[1854,65],[1857,60],[1880,45],[1898,35],[1904,72],[1940,50],[1944,75]],
+ 'br|ru':[[1840,35],[1853,15],[1857,35],[1878,30],[1907,62],[1917,30],[1941,62],[1946,25],[1955,30]],
+ 'br|de':[[1840,60],[1871,55],[1898,42],[1906,32],[1919,40],[1925,52],[1936,40],[1939,8],[1949,65]],
+ 'br|jp':[[1840,50],[1868,55],[1902,78],[1923,50],[1931,38],[1937,28],[1941,6],[1952,55]],
+ 'br|us':[[1840,45],[1871,55],[1898,68],[1917,78],[1941,85]],
+ 'fr|ru':[[1840,45],[1853,20],[1857,45],[1892,72],[1917,30],[1935,50],[1939,35],[1941,55],[1946,40],[1966,48]],
+ 'de|fr':[[1840,45],[1866,35],[1870,10],[1871,20],[1919,22],[1925,38],[1933,22],[1939,6],[1945,20],[1950,50],[1963,72]],
+ 'fr|jp':[[1840,50],[1907,58],[1931,40],[1940,30],[1945,40],[1952,55]],
+ 'fr|us':[[1840,60],[1917,72],[1941,65],[1949,70],[1966,58]],
+ 'de|ru':[[1840,60],[1879,50],[1890,42],[1907,35],[1914,6],[1918,30],[1922,58],[1933,28],[1939,50],[1941,4],[1945,15],[1949,22],[1970,40]],
+ 'jp|ru':[[1840,45],[1875,50],[1895,30],[1904,6],[1905,30],[1907,50],[1917,30],[1925,40],[1931,28],[1938,18],[1941,40],[1945,10],[1956,35]],
+ 'ru|us':[[1840,60],[1867,62],[1905,50],[1917,30],[1933,45],[1941,62],[1946,22],[1963,30],[1969,35]],
+ 'de|jp':[[1840,50],[1895,38],[1914,15],[1919,40],[1936,70],[1945,50],[1952,58]],
+ 'de|us':[[1840,60],[1898,50],[1917,10],[1919,40],[1933,35],[1941,6],[1945,30],[1949,72]],
+ 'jp|us':[[1840,45],[1854,50],[1868,58],[1905,55],[1908,50],[1924,42],[1931,35],[1937,28],[1941,4],[1945,30],[1952,75]],
+ 'br|cn':[[1840,30],[1861,42],[1902,45],[1928,45],[1937,55],[1941,65],[1945,60],[1949,40],[1954,45],[1967,30],[1972,50]],
+ 'cn|fr':[[1840,40],[1856,30],[1861,42],[1884,20],[1886,40],[1928,45],[1945,50],[1949,30],[1964,50]],
+ 'cn|ru':[[1840,45],[1858,30],[1881,40],[1900,28],[1905,40],[1917,42],[1924,55],[1929,30],[1932,45],[1937,60],[1945,55],[1950,80],[1958,65],[1960,40],[1963,28],[1969,12],[1970,20]],
+ 'cn|de':[[1840,50],[1861,52],[1897,32],[1914,40],[1921,58],[1928,62],[1938,40],[1941,20],[1945,40],[1949,40],[1972,50]],
+ 'cn|jp':[[1840,50],[1871,50],[1874,40],[1894,15],[1895,35],[1905,38],[1915,22],[1919,30],[1928,25],[1931,12],[1937,4],[1945,30],[1952,30],[1972,55]],
+ 'cn|us':[[1840,52],[1844,55],[1899,58],[1908,62],[1928,60],[1937,65],[1941,75],[1945,70],[1949,20],[1950,8],[1954,15],[1969,22],[1971,35],[1972,50]]
+};
+var INTL_ALT_CN={br:58,fr:52,ru:35,de:48,jp:40,us:70};   /* 非“中共胜利”路线下 1949 年后与中国的基调 */
+function intlClimate(a,b,y){
+ var k=intlPK(a,b), t=INTL_CLIMATE[k], v=t?intlStep(t,y):50;
+ if((a==='cn'||b==='cn')&&y>=1949&&!intlPRC()){ var o=a==='cn'?b:a; v=INTL_ALT_CN[o]||50; }
+ var ra=intlRegime(a,y)[1], rb=intlRegime(b,y)[1];
+ if(ra===rb&&ra!=='none') v+=4;
+ if(y>=1945&&((ra==='comm')!==(rb==='comm'))&&ra!=='none'&&rb!=='none') v-=6;
+ return Math.max(2,Math.min(95,v));
+}
+/* 陆上接壤（或隔一条边境线对峙）的两国，与对峙的地点 */
+function intlFront(a,b,y){
+ switch(intlPK(a,b)){
+  case 'cn|ru': return y<1917?'黑龙江与新疆边境':(y<1949?'外蒙古与新疆边境':'中苏边境');
+  case 'cn|jp': return y<1895?'朝鲜':(y<1945?'南满与华北':'');
+  case 'cn|fr': return y>=1885&&y<1954?'中越边境':'';
+  case 'br|cn': return y<1947?'滇缅与西藏边境':'';
+  case 'jp|ru': return y<1905?'朝鲜与满洲':'库页岛与远东';
+  case 'de|ru': return y<1945?'东欧边境':(y>=1949?'两德边界':'');
+  case 'de|fr': return '莱茵河沿岸';
+ }
+ return '';
+}
+/* 结盟传统：英国 1902 年前“光荣孤立”、美国 1941 年前不结同盟、日本开国前不结盟 */
+var INTL_ALLY_FROM={br:1902,us:1941,jp:1868,fr:1840,ru:1840,de:1840};
+/* 同一国对同一对象的同类决策，至少隔这么多天 */
+var INTL_CD={improve:300,trade:540,ally:720,nap:720,pressure:365,sanction:720,armup:300,reform:420,loan:720,mediate:365,border:365};
+function intlCdOk(k,a,x,ord){ var I=s.intl; if(!I.cd) I.cd={}; var v=I.cd[k+a+(x||'')]; return v===undefined||ord-v>=INTL_CD[a]; }
+
+/* ---------- 史实锚点 ----------
+   k: war 交战 / clash 武装冲突 / hostile 敌对 / ally 同盟 / entente 协约 / nap 互不侵犯 / event 一次性（条约、政体更迭）
+   ab: [a,b] 或 [[a,b],[a,c]...]；f/u: 起止 [年,月,日]；d: 一次性改变关系；st: 政体更迭时的国内稳定；prc: 只在“中共胜利”路线下 */
+var INTL_HIST=[
+ {id:'opium1',k:'war',ab:[['br','cn']],f:[1840,6,28],u:[1842,8,29],t:'第一次鸦片战争：英军封锁珠江口。',te:'《南京条约》签订，割香港岛，开放五口通商。'},
+ {id:'crimea',k:'war',ab:[['ru','br'],['ru','fr']],f:[1854,3,28],u:[1856,3,30],t:'克里米亚战争：英、法对俄宣战。',te:'《巴黎和约》签订，克里米亚战争结束。'},
+ {id:'opium2',k:'war',ab:[['br','cn'],['fr','cn']],f:[1856,10,8],u:[1860,10,24],t:'第二次鸦片战争：英国借“亚罗号事件”开衅，法国随后出兵。',te:'《北京条约》签订，第二次鸦片战争结束。'},
+ {id:'aigun',k:'event',ab:[['ru','cn']],f:[1858,5,28],d:-10,t:'《瑷珲条约》：黑龙江以北约六十万平方公里划归俄国。'},
+ {id:'peking60',k:'event',ab:[['ru','cn']],f:[1860,11,14],d:-8,t:'中俄《北京条约》：乌苏里江以东约四十万平方公里划归俄国。'},
+ {id:'fpwar',k:'war',ab:[['fr','de']],f:[1870,7,19],u:[1871,5,10],t:'普法战争爆发。',te:'《法兰克福和约》签订，法国割让阿尔萨斯—洛林。'},
+ {id:'reich',k:'event',ab:[['de','fr']],f:[1871,1,18],st:70,t:'德意志帝国在凡尔赛宫宣告成立。'},
+ {id:'meiji',k:'event',ab:[['jp','us']],f:[1868,1,3],st:45,t:'日本王政复古，明治政府成立。'},
+ {id:'sinofr',k:'war',ab:[['fr','cn']],f:[1884,8,23],u:[1885,6,9],t:'中法战争：法舰在马尾袭击福建水师。',te:'《中法新约》签订，中法战争结束。'},
+ {id:'franru',k:'ally',ab:[['fr','ru']],f:[1894,1,4],u:[1917,11,7],t:'法俄同盟正式生效。',te:'俄国退出大战，法俄同盟瓦解。'},
+ {id:'jiawu',k:'war',ab:[['jp','cn']],f:[1894,7,25],u:[1895,4,17],t:'甲午战争：日舰在丰岛海面袭击清军运兵船。',te:'《马关条约》签订：割台湾、澎湖，赔款二亿两。'},
+ {id:'triple',k:'event',ab:[['ru','jp'],['de','jp'],['fr','jp']],f:[1895,4,23],d:-12,tn:20,t:'俄、德、法三国干涉，迫使日本退还辽东半岛。'},
+ {id:'boxer',k:'war',ab:[['br','cn'],['fr','cn'],['ru','cn'],['de','cn'],['jp','cn'],['us','cn']],f:[1900,6,21],u:[1901,9,7],t:'八国联军侵华，攻陷天津、北京。',te:'《辛丑条约》签订，赔款四亿五千万两。'},
+ {id:'angjp',k:'ally',ab:[['br','jp']],f:[1902,1,30],u:[1923,8,17],t:'英日同盟在伦敦缔结。',te:'英日同盟终止。'},
+ {id:'rujp',k:'war',ab:[['jp','ru']],f:[1904,2,8],u:[1905,9,5],t:'日俄战争：日舰夜袭旅顺口。战场在中国东北。',te:'《朴茨茅斯和约》签订，日本取得南满权益。'},
+ {id:'cordiale',k:'entente',ab:[['br','fr']],f:[1904,4,8],u:[1973,1,1],t:'英法签订《英法协约》。'},
+ {id:'angru',k:'entente',ab:[['br','ru']],f:[1907,8,31],u:[1917,11,7],t:'英俄签订协约，三国协约成形。',te:'俄国革命，英俄协约失效。'},
+ {id:'ww1br',k:'war',ab:[['br','de'],['fr','de'],['jp','de']],f:[1914,8,4],u:[1918,11,11],t:'第一次世界大战：英、法对德作战，日本随后对德宣战并进攻青岛。',te:'德国签署停战协定，第一次世界大战结束。'},
+ {id:'ww1ru',k:'war',ab:[['ru','de']],f:[1914,8,1],u:[1918,3,3],t:'德国对俄宣战。',te:'苏俄与德国签订《布列斯特和约》，退出大战。'},
+ {id:'21tiao',k:'event',ab:[['jp','cn']],f:[1915,5,25],d:-14,tn:15,t:'日本以最后通牒迫使北京政府接受“二十一条”中大部分条款。'},
+ {id:'ww1us',k:'war',ab:[['us','de']],f:[1917,4,6],u:[1918,11,11],t:'美国对德宣战。',te:'美德停战。'},
+ {id:'ww1cn',k:'war',ab:[['cn','de']],f:[1917,8,14],u:[1918,11,11],t:'北京政府对德、奥宣战。',te:'中德战争状态随大战停战结束。'},
+ {id:'oct17',k:'event',ab:[['ru','de']],f:[1917,11,7],st:15,t:'俄国十月革命，布尔什维克夺取政权。'},
+ {id:'versail',k:'event',ab:[['jp','cn']],f:[1919,6,28],d:-8,t:'《凡尔赛和约》将德国在山东的权益转给日本，中国代表拒绝签字。'},
+ {id:'ussr',k:'event',ab:[['ru','us']],f:[1922,12,30],st:45,t:'苏联成立。'},
+ {id:'ninep',k:'event',ab:[['jp','cn'],['us','cn']],f:[1922,2,6],d:5,t:'华盛顿会议签订《九国公约》，日本同意归还山东。'},
+ {id:'cnru24',k:'event',ab:[['ru','cn']],f:[1924,5,31],d:10,t:'中苏建交，苏联放弃沙俄在华部分特权。'},
+ {id:'cer29',k:'clash',ab:[['ru','cn']],f:[1929,7,17],u:[1929,12,22],t:'中东路事件：中苏在东北边境发生武装冲突。',te:'中苏签订《伯力协定》，中东路恢复原状。'},
+ {id:'mukden',k:'hostile',ab:[['jp','cn']],f:[1931,9,18],u:[1937,7,7],t:'九一八事变，日本关东军占领东北。',te:''},
+ {id:'hitler',k:'event',ab:[['de','fr']],f:[1933,1,30],st:55,t:'希特勒出任德国总理。'},
+ {id:'jpleague',k:'event',ab:[['jp','us'],['jp','br']],f:[1933,3,27],d:-6,t:'日本退出国际联盟。'},
+ {id:'antikom',k:'entente',ab:[['de','jp']],f:[1936,11,25],u:[1940,9,27],t:'德日签订《反共产国际协定》。',te:''},
+ {id:'sinojp',k:'war',ab:[['jp','cn']],f:[1937,7,7],u:[1945,9,2],t:'七七事变，中日全面战争爆发。',te:'日本签署投降书，中日战争结束。'},
+ {id:'cnrunap',k:'nap',ab:[['ru','cn']],f:[1937,8,21],u:[1945,8,14],t:'中苏签订《互不侵犯条约》，苏联开始援华。',te:''},
+ {id:'molotov',k:'nap',ab:[['de','ru']],f:[1939,8,23],u:[1941,6,22],t:'苏德签订《互不侵犯条约》。',te:''},
+ {id:'ww2eu',k:'war',ab:[['br','de']],f:[1939,9,3],u:[1945,5,8],t:'第二次世界大战：英、法对德宣战。',te:'德国无条件投降，欧洲战事结束。'},
+ {id:'ww2fr',k:'war',ab:[['fr','de']],f:[1939,9,3],u:[1940,6,22],t:'法国对德宣战。',te:'法国战败投降，维希政权成立。'},
+ {id:'axis',k:'ally',ab:[['de','jp']],f:[1940,9,27],u:[1945,5,8],t:'德、意、日在柏林签订三国同盟条约。',te:''},
+ {id:'rujpnap',k:'nap',ab:[['ru','jp']],f:[1941,4,13],u:[1945,8,8],t:'苏日签订《中立条约》。',te:''},
+ {id:'barb',k:'war',ab:[['ru','de']],f:[1941,6,22],u:[1945,5,8],t:'德国入侵苏联。',te:''},
+ {id:'pacific',k:'war',ab:[['us','jp'],['br','jp']],f:[1941,12,7],u:[1945,9,2],t:'日军偷袭珍珠港，太平洋战争爆发。',te:'日本投降，太平洋战争结束。'},
+ {id:'usde41',k:'war',ab:[['us','de']],f:[1941,12,11],u:[1945,5,8],t:'德国对美宣战。',te:''},
+ {id:'unitedn',k:'ally',ab:[['us','cn'],['br','cn']],f:[1942,1,1],u:[1945,9,2],t:'中、美、英、苏等二十六国签署《联合国家宣言》。',te:''},
+ {id:'extrat',k:'event',ab:[['us','cn'],['br','cn']],f:[1943,1,11],d:8,t:'美、英与中国签约，放弃在华治外法权。'},
+ {id:'paris44',k:'event',ab:[['fr','de']],f:[1944,8,25],st:40,t:'巴黎光复。'},
+ {id:'rujp45',k:'war',ab:[['ru','jp']],f:[1945,8,8],u:[1945,9,2],t:'苏联对日宣战，出兵中国东北。',te:''},
+ {id:'cnru45',k:'event',ab:[['ru','cn']],f:[1945,8,14],d:4,t:'国民政府与苏联签订《中苏友好同盟条约》。'},
+ {id:'un45',k:'event',ab:[['us','cn'],['br','cn']],f:[1945,10,24],d:3,t:'联合国成立，中国为安理会常任理事国。'},
+ {id:'coldwar',k:'hostile',ab:[['us','ru']],f:[1947,3,12],u:[1973,1,1],t:'杜鲁门主义出台，冷战开始。'},
+ {id:'nato',k:'ally',ab:[['us','br'],['us','fr'],['br','fr']],f:[1949,4,4],u:[1973,1,1],t:'北大西洋公约组织成立。'},
+ {id:'frg',k:'event',ab:[['de','us']],f:[1949,5,23],st:55,t:'德意志联邦共和国成立。'},
+ {id:'prcus',k:'hostile',prc:1,ab:[['us','cn']],f:[1949,10,1],u:[1971,7,15],t:'中华人民共和国成立，美国拒不承认新政府。',te:'基辛格秘密访华后，美方宣布尼克松将访华。'},
+ {id:'ukprc',k:'event',prc:1,ab:[['br','cn']],f:[1950,1,6],d:6,t:'英国承认中华人民共和国。'},
+ {id:'cnru50',k:'ally',prc:1,ab:[['ru','cn']],f:[1950,2,14],u:[1960,7,16],t:'《中苏友好同盟互助条约》在莫斯科签订。',te:'苏联撤走在华专家，中苏同盟名存实亡。'},
+ {id:'korea',k:'war',prc:1,ab:[['us','cn']],f:[1950,10,19],u:[1953,7,27],t:'中国人民志愿军入朝，与美军交战。',te:'朝鲜停战协定签订。'},
+ {id:'usjp51',k:'ally',ab:[['us','jp']],f:[1951,9,8],u:[1973,1,1],t:'《美日安全保障条约》签订。'},
+ {id:'jpsov',k:'event',ab:[['jp','us']],f:[1952,4,28],st:60,t:'《旧金山和约》生效，日本恢复主权。'},
+ {id:'frgnato',k:'ally',ab:[['de','us'],['de','br'],['de','fr']],f:[1955,5,9],u:[1973,1,1],t:'联邦德国加入北约。'},
+ {id:'cuba',k:'event',ab:[['us','ru']],f:[1962,10,22],d:-8,tn:35,t:'古巴导弹危机。'},
+ {id:'sinosov',k:'hostile',prc:1,ab:[['ru','cn']],f:[1963,7,14],u:[1973,1,1],t:'中苏公开论战，两党关系破裂。'},
+ {id:'frprc',k:'event',prc:1,ab:[['fr','cn']],f:[1964,1,27],d:15,t:'中法建交。'},
+ {id:'zhenbao',k:'clash',prc:1,ab:[['ru','cn']],f:[1969,3,2],u:[1969,9,11],t:'珍宝岛事件：中苏边境爆发武装冲突。',te:'周恩来与柯西金在北京机场会晤，边境局势暂缓。'},
+ {id:'nixon',k:'event',prc:1,ab:[['us','cn']],f:[1972,2,21],d:12,t:'尼克松访华，中美发表《上海公报》。'},
+ {id:'ukamb',k:'event',prc:1,ab:[['br','cn']],f:[1972,3,13],d:6,t:'中英升格为大使级外交关系。'},
+ {id:'cnjp72',k:'event',prc:1,ab:[['jp','cn']],f:[1972,9,29],d:15,t:'中日发表联合声明，两国建交。'}
+];
+INTL_HIST.forEach(function(h){ h.fo=calOrd(h.f[0],h.f[1],h.f[2]); h.uo=h.u?calOrd(h.u[0],h.u[1],h.u[2]):0; });
+var INTL_LOCK_TXT={war:'交战',clash:'武装冲突',hostile:'敌对',ally:'同盟',entente:'协约',nap:'互不侵犯'};
+var INTL_LOCK_RANK={war:6,clash:5,hostile:4,ally:3,entente:2,nap:1};
+function intlHistOn(h,ord){ if(h.prc&&!intlPRC()) return false; return h.k!=='event'&&ord>=h.fo&&ord<h.uo; }
+function intlHasPair(h,a,b){ for(var i=0;i<h.ab.length;i++){ var p=h.ab[i]; if((p[0]===a&&p[1]===b)||(p[0]===b&&p[1]===a)) return true; } return false; }
+/* 当前两国之间最强的史实锁（或玩家自己宣战造成的交战） */
+function intlLock(a,b,ord){
+ if(ord===undefined) ord=s.cal.ord;
+ var best=null;
+ for(var i=0;i<INTL_HIST.length;i++){ var h=INTL_HIST[i]; if(intlHistOn(h,ord)&&intlHasPair(h,a,b)&&(!best||INTL_LOCK_RANK[h.k]>INTL_LOCK_RANK[best.k])) best=h; }
+ if(!best&&(a==='cn'||b==='cn')){ var o=a==='cn'?b:a, P=s.__powers&&s.__powers[INTL_POW[o]]; if(P&&P.war) best={k:'war',id:'player',t:'你方宣战'}; }
+ return best;
+}
+
+/* ---------- 状态 ---------- */
+function intlRand(){
+ var I=s.intl, a=(I.rs|0)+0x6D2B79F5|0; I.rs=a;
+ var t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t;
+ return ((t^t>>>14)>>>0)/4294967296;
+}
+function intlMonthKey(o){ return o.y*12+o.m-1; }
+function intlRel(a,b){
+ if(a===b) return 100;
+ if(a==='cn'||b==='cn'){ initPowers(); var o=a==='cn'?b:a, P=s.__powers[INTL_POW[o]]; return P?(+P.r||0):50; }
+ var v=s.intl.r[intlPK(a,b)]; return v===undefined?50:v;
+}
+function intlSetRel(a,b,v){
+ v=intlCl(v,0,100);
+ if(a==='cn'||b==='cn'){ initPowers(); var o=a==='cn'?b:a, P=s.__powers[INTL_POW[o]]; if(P) P.r=v; return v; }
+ s.intl.r[intlPK(a,b)]=v; return v;
+}
+function intlAddRel(a,b,d){ return intlSetRel(a,b,intlRel(a,b)+d); }
+function intlTen(a,b){ var v=s.intl.t[intlPK(a,b)]; return v===undefined?0:v; }
+function intlSetTen(a,b,v){ s.intl.t[intlPK(a,b)]=intlCl(v,0,100); }
+function intlAddTen(a,b,d){ intlSetTen(a,b,intlTen(a,b)+d); }
+function intlPower(k,y){
+ if(k==='cn'){ var N=s.natl||{}; return Math.max(5,Math.min(95,((+N.军事||40)*0.35+(+N.经济||40)*0.25+(+N.工业||15)*0.2+(+N.稳定||50)*0.2)*0.8)); }
+ var n=s.intl.n[k]; if(!n) return 0;
+ return Math.max(1,Math.min(100,intlCurve(INTL_REF[k],y)+n.mil*0.4+n.eco*0.4+(n.stab-60)*0.15));
+}
+function intlTreaties(a,b,kind){ return (s.intl.tr||[]).filter(function(t){ return (!kind||t.k===kind)&&(!a||t.a===a||t.b===a)&&(!b||t.a===b||t.b===b); }); }
+function intlNews(t,kind,a,b,hist,me){
+ var I=s.intl; I.news.unshift({o:s.cal.ord,t:t,k:kind,a:a||'',b:b||'',h:hist?1:0,me:me||''});
+ if(I.news.length>40) I.news.length=40;
+}
+function intlInit(fresh){
+ if(!s||!s.cal) return;
+ initPowers();
+ var today=s.cal.ord, y=calFromOrd(today).y;
+ var I={v:1,rs:(Math.floor(Math.random()*4294967296)>>>0)|0,last:intlMonthKey(calFromOrd(today)),hd:{},n:{},r:{},t:{},tr:[],news:[],ld:{},acc:0,dec:0,hn:0,mig:fresh?0:1};
+ s.intl=I;
+ INTL_KEYS.forEach(function(k){
+  var pv={}; ['agg','trade','prag','act'].forEach(function(f){ pv[f]=Math.round((intlRand()-0.5)*24); });
+  I.n[k]={pv:pv,mil:Math.round((intlRand()-0.5)*8),eco:Math.round((intlRand()-0.5)*8),stab:Math.round(55+intlRand()*15),acts:0};
+ });
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){
+  var a=INTL_ALL[i], b=INTL_ALL[j], c=intlClimate(a,b,y);
+  if((a==='cn'||b==='cn')&&!fresh){ /* 旧档：保留玩家已经打出的对华关系 */ }
+  else intlSetRel(a,b,c+(intlRand()-0.5)*12);
+  intlSetTen(a,b,Math.max(0,(55-intlRel(a,b))*1.1));
+ }
+ /* 开局之前已经发生的史实：静默落地（不写纪事），只设锁与标记 */
+ INTL_HIST.forEach(function(h){ if(h.fo<=today){ I.hd[h.id]=1; if(h.uo&&h.uo<=today) I.hd[h.id+'_e']=1; } });
+ intlApplyLocks(today);
+ I.hn=intlNextHistOrd();
+ return I;
+}
+function intlEnsure(){
+ if(!s||!s.cal) return null;
+ if(!s.intl||typeof s.intl!=='object'||!s.intl.n||!s.intl.r) intlInit(false);
+ var I=s.intl;
+ if(!Array.isArray(I.tr)) I.tr=[]; if(!Array.isArray(I.news)) I.news=[]; if(!I.hd) I.hd={}; if(!I.t) I.t={}; if(!I.ld) I.ld={};
+ INTL_KEYS.forEach(function(k){ if(!I.n[k]) I.n[k]={pv:{agg:0,trade:0,prag:0,act:0},mil:0,eco:0,stab:60,acts:0}; });
+ if(typeof I.last!=='number'||!isFinite(I.last)) I.last=intlMonthKey(calFromOrd(s.cal.ord));
+ if(typeof I.rs!=='number') I.rs=12345;
+ return I;
+}
+/* 锁：把史实时期的关系压进合理区间 */
+function intlApplyLocks(ord){
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){
+  var a=INTL_ALL[i], b=INTL_ALL[j], L=intlLock(a,b,ord); if(!L) continue;
+  var r=intlRel(a,b), t=intlTen(a,b);
+  if(L.k==='war'){ if(r>10) intlSetRel(a,b,10); if(t<85) intlSetTen(a,b,85); }
+  else if(L.k==='clash'){ if(r>15) intlSetRel(a,b,15); if(t<80) intlSetTen(a,b,80); }
+  else if(L.k==='hostile'){ if(r>30) intlSetRel(a,b,30); if(t<50) intlSetTen(a,b,50); }
+  else if(L.k==='ally'){ if(r<72) intlSetRel(a,b,72); if(t>20) intlSetTen(a,b,20); }
+  else if(L.k==='entente'){ if(r<60) intlSetRel(a,b,60); if(t>35) intlSetTen(a,b,35); }
+  else if(L.k==='nap'){ if(r<35) intlSetRel(a,b,35); }
+ }
+}
+function intlNextHistOrd(){
+ var best=Infinity, I=s.intl;
+ INTL_HIST.forEach(function(h){
+  if(!I.hd[h.id]&&h.fo<best) best=h.fo;
+  if(h.uo&&h.k!=='event'&&!I.hd[h.id+'_e']&&h.uo<best) best=h.uo;
+ });
+ return best===Infinity?CAL_END_ORD+1:best;
+}
+function intlPairsText(h){
+ var seen={}, names=[];
+ h.ab.forEach(function(p){ p.forEach(function(k){ if(!seen[k]){ seen[k]=1; names.push(k); } }); });
+ return names;
+}
+/* 每日：只比较一个数（下一个史实日期），不到就什么也不做 */
+function intlDay(now){
+ if(!s||!s.intl) return;
+ var I=s.intl, today=s.cal.ord;
+ if(today<I.hn) return;
+ INTL_HIST.forEach(function(h){
+  var on=!h.prc||intlPRC();
+  if(!I.hd[h.id]&&h.fo<=today){
+   I.hd[h.id]=1;
+   if(!on) return;
+   h.ab.forEach(function(p){ if(h.d) intlAddRel(p[0],p[1],h.d); if(h.tn) intlAddTen(p[0],p[1],h.tn); });
+   if(h.st!==undefined){ var k0=h.ab[0][0]; if(s.intl.n[k0]) s.intl.n[k0].stab=h.st; }
+   intlNews(h.t,h.k,h.ab[0][0],h.ab[0][1],1,'');
+  }
+  if(h.uo&&h.k!=='event'&&!I.hd[h.id+'_e']&&h.uo<=today){
+   I.hd[h.id+'_e']=1;
+   if(!on) return;
+   if(h.k==='war'||h.k==='clash'||h.k==='hostile') h.ab.forEach(function(p){ intlSetTen(p[0],p[1],Math.min(intlTen(p[0],p[1]),55)); intlSetRel(p[0],p[1],Math.max(intlRel(p[0],p[1]),18)); });
+   if(h.te) intlNews(h.te,h.k+'-end',h.ab[0][0],h.ab[0][1],1,'');
+  }
+ });
+ intlApplyLocks(today);
+ I.hn=intlNextHistOrd();
+}
+
+/* ---------- 每月：国家 AI ---------- */
+function intlCentral(){
+ if(!s) return false;
+ var y=s.year, f=s.faction, o=s.cal.ord;
+ var cf=y<1912?'qing':(y<1928?'beiyang':(o<INTL_PRC_ORD?'kmt':(intlPRC()?'cpc':'kmt')));
+ return f===cf;
+}
+function intlNatl(d){
+ if(!s.natl) return '';
+ var out=[];
+ Object.keys(d).forEach(function(k){ if(!d[k]) return; s.natl[k]=clamp((+s.natl[k]||0)+d[k]); out.push((NAT_KEYS.filter(function(x){return x[0]===k;})[0]||[k,k])[1]+' '+(d[k]>0?'+':'')+d[k]); });
+ return out.join('，');
+}
+/* 涉华动向对玩家的后果：国势一律变化；再按身份给出具体后果 */
+function intlChina(kind,k,natl){
+ var line=intlNatl(natl||{}), me='', role=LIVE_LINE[s.role];
+ if(s.isLeader&&intlCentral()) me='你执掌中枢，须亲自应对';
+ else if(role==='biz'&&(kind==='trade'||kind==='sanction'||kind==='loan')) me=kind==='sanction'?'洋货断档，铺面生意受挫':(kind==='trade'?'口岸生意见旺，铺面进项随之起落':'借款入库，市面银根稍松');
+ else if((role==='mil')&&(kind==='border'||kind==='pressure')){ me='边情吃紧，营中加紧戒备'; if(s.unit&&isMil()) s.unit.mor=clamp((+s.unit.mor||50)+2); }
+ else if(role==='civ'&&(s.rank||0)>=3&&(kind==='pressure'||kind==='loan')) me='交涉与摊派的公事落到你手上';
+ return (line?('国势：'+line):'')+(me?((line?'；':'')+me):'');
+}
+var INTL_ACT_NAME={improve:'修好',trade:'通商',ally:'结盟',nap:'互不侵犯',pressure:'施压',sanction:'制裁',armup:'扩军',reform:'改革',loan:'借款',mediate:'调停',border:'边境对峙'};
+function intlCandidates(k,ord,y){
+ var I=s.intl, n=I.n[k], P=intlPers(k,y), pw=intlPower(k,y), goal=intlGoal(k,y), out=[], foreign=intlForeign(k,ord);
+ var R=function(){ return intlRand(); };
+ /* 内政 */
+ var threat=0, rival=null;
+ INTL_ALL.forEach(function(x){ if(x===k) return; var tv=intlTen(k,x)*0.6+Math.max(0,intlPower(x,y)-pw)*0.4; if(tv>threat){ threat=tv; rival=x; } });
+ out.push({a:'armup',u:6+threat*0.45+(P.agg-50)*0.35-Math.max(0,40-(50+n.eco))*0.5-(n.mil>10?n.mil:0)+R()*8,x:rival});
+ out.push({a:'reform',u:6+(55-n.stab)*0.7+Math.max(0,-n.eco)*0.6+(P.prag-50)*0.15+R()*8});
+ if(!foreign) return out;
+ INTL_ALL.forEach(function(x){
+  if(x===k) return;
+  if(x!=='cn'&&!intlActive(x,ord)) return;
+  var r=intlRel(k,x), t=intlTen(k,x), L=intlLock(k,x,ord), Lk=L?L.k:'', clim=intlClimate(k,x,y), xp=intlPower(x,y);
+  var hostileL=Lk==='war'||Lk==='clash'||Lk==='hostile';
+  /* 共同的对手 */
+  var ce=0; INTL_ALL.forEach(function(z){ if(z===k||z===x) return; var h=Math.min(100-intlRel(k,z),100-intlRel(x,z)); if(h>ce) ce=h; });
+  var targ=goal[4]===x&&(goal[3]==='expand'||goal[3]==='revanche'||goal[3]==='ideology');
+  if(!hostileL&&r<80&&r<clim+18) out.push({a:'improve',x:x,u:4+(r<clim?6:0)+Math.max(0,ce-55)*0.35+(P.trade-50)*0.12+(P.prag-50)*0.1-(targ?15:0)+R()*10});
+  if(!hostileL&&r>=60&&!intlTreaties(k,x,'trade').length&&!intlTreaties(k,x,'sanction').length) out.push({a:'trade',x:x,u:12+(P.trade-50)*0.4+(r-60)*0.35+R()*10});
+  var bloc=y<1945;   /* 1945 年后的阵营（北约、美日、中苏）由史实决定，AI 不另结同盟 */
+  if(x!=='cn'&&!L&&r>=75&&ce>=65&&clim>=55&&bloc&&y>=INTL_ALLY_FROM[k]&&y>=INTL_ALLY_FROM[x]&&!intlTreaties(k,x,'ally').length&&intlTreaties(k,null,'ally').length<2) out.push({a:'ally',x:x,u:22+(ce-65)*0.8+R()*10});
+  if(x!=='cn'&&!L&&r>=38&&r<75&&t>=40&&!intlTreaties(k,x,'nap').length&&!intlTreaties(k,x,'ally').length){
+   var front=0; INTL_ALL.forEach(function(z){ if(z!==k&&z!==x) front=Math.max(front,intlTen(k,z)); });
+   if(front>=55) out.push({a:'nap',x:x,u:12+(front-55)*0.5+(P.prag-50)*0.2+R()*8});
+  }
+  if(Lk!=='war'&&Lk!=='ally'&&(targ||r<35)&&pw>xp+8&&!(x==='cn'&&k==='de'&&y>=1919)) out.push({a:'pressure',x:x,u:4+(P.agg-50)*0.55+(40-r)*0.45+(pw-xp)*0.25+(targ?10:0)+(x==='cn'&&y>=1945?-12:0)+R()*8});
+  if(Lk!=='ally'&&r<30&&pw>=xp*0.8&&!intlTreaties(k,x,'sanction').length&&y>=1870&&!(x==='cn'&&y<1945)) out.push({a:'sanction',x:x,u:6+(30-r)*0.7+(P.agg-50)*0.2+(P.trade-50)*0.1+R()*8});
+  var need=x==='cn'?Math.max(0,45-((s.natl&&+s.natl.财政)||40)):Math.max(0,-(I.n[x]?I.n[x].eco:0));
+  var prcLoan=!(x==='cn'&&ord>=INTL_PRC_ORD&&intlPRC()&&!(Lk==='ally'));
+  if(!hostileL&&prcLoan&&r>=50&&n.eco>=-2&&need>3&&!intlTreaties(k,x,'loan').length) out.push({a:'loan',x:x,u:8+need*0.7+(P.trade-50)*0.25+R()*8});
+  if(Lk!=='ally'&&Lk!=='entente'&&t>=68&&P.agg>=50&&intlFront(k,x,y)&&Lk!=='war') out.push({a:'border',x:x,u:4+(t-68)*0.7+(P.agg-50)*0.45+R()*8});
+ });
+ /* 调停：与两方都不错，而两方剑拔弩张 */
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){
+  var b=INTL_ALL[i], c=INTL_ALL[j]; if(b===k||c===k) continue;
+  var tt=intlTen(b,c), Lb=intlLock(b,c,ord);
+  if(tt>=65&&intlRel(k,b)>=55&&intlRel(k,c)>=55&&!(Lb&&(Lb.k==='war'||Lb.k==='clash'))) out.push({a:'mediate',x:b,y:c,u:6+(tt-65)*0.7+(P.prag-50)*0.3+R()*8});
+ }
+ return out.filter(function(c){ return intlCdOk(k,c.a,c.x,ord); });
+}
+function intlDo(k,c,ord,y){
+ var I=s.intl, n=I.n[k], A=intlName(k,ord), x=c.x, X=x?intlName(x,ord):'', news='', me='', cnGov=intlCnName(ord);
+ if(!I.cd) I.cd={}; I.cd[k+c.a+(x||'')]=ord;
+ function pk(a){ return a[Math.floor(intlRand()*a.length)]; }
+ switch(c.a){
+  case 'armup': n.mil=intlCl(n.mil+4,-20,25); n.eco=intlCl(n.eco-1.5,-25,25);
+   if(x) intlAddTen(k,x,4);
+   var parl=intlRegime(k,y)[1]==='lib'||(k==='jp'&&y>=1890)||(k==='de'&&y>=1871&&y<1933);
+   news=A+pk(parl?['议会通过扩军预算','增建舰队','扩编陆军']:['增建舰队','扩编陆军','添购新式枪炮'])+(x?'，矛头所向是'+X:'')+'。'; break;
+  case 'reform':
+   if(intlRand()<0.62+(intlPers(k,y).prag-50)/250){ n.stab=intlCl(n.stab+6,0,100); n.eco=intlCl(n.eco+2.5,-25,25); news=A+'推行'+(['财政','行政','军制','税制'][Math.floor(intlRand()*4)])+'改革，国内渐稳。'; }
+   else { n.stab=intlCl(n.stab-3,0,100); news=A+'改革受阻，内阁更迭。'; }
+   break;
+  case 'improve': intlAddRel(k,x,4+intlRand()*3); intlAddTen(k,x,-4);
+   news=x==='cn'?pk(y<1943?[A+'公使与'+cnGov+'往来频繁，对华关系转暖。',A+'减让部分在华商约条款，对华关系转暖。',A+'派特使访华，与'+cnGov+'商谈悬案。']:[A+'派特使访华，与'+cnGov+'商谈悬案。',A+'与'+cnGov+'扩大文化与贸易往来。']):pk([A+'遣使赴'+X+'，两国关系转暖。',A+'与'+X+'了结一桩边界、侨民或债务悬案，关系转暖。',A+'派高级使团访问'+X+'。']);
+   if(x==='cn') me=intlChina('improve',k,{});
+   break;
+  case 'trade': I.tr.push({id:'t'+ord+k+x,k:'trade',a:k,b:x,f:ord,u:ord+3650}); intlAddRel(k,x,4); n.eco=intlCl(n.eco+1.5,-25,25);
+   if(I.n[x]) I.n[x].eco=intlCl(I.n[x].eco+1.5,-25,25);
+   news=x==='cn'?(A+'与'+cnGov+'议定新的通商章程，为期十年。'):(A+'与'+X+'签订通商协定，为期十年。');
+   if(x==='cn') me=intlChina('trade',k,{经济:1});
+   break;
+  case 'ally': I.tr.push({id:'a'+ord+k+x,k:'ally',a:k,b:x,f:ord,u:0}); intlAddRel(k,x,5);
+   var z=null, zh=0; INTL_ALL.forEach(function(q){ if(q===k||q===x) return; var h=Math.min(100-intlRel(k,q),100-intlRel(x,q)); if(h>zh){ zh=h; z=q; } });
+   if(z){ intlAddTen(k,z,6); intlAddTen(x,z,6); }
+   news=A+'与'+X+'缔结同盟'+(z?'，矛头指向'+intlName(z,ord):'')+'。'; break;
+  case 'nap': I.tr.push({id:'n'+ord+k+x,k:'nap',a:k,b:x,f:ord,u:ord+3650}); intlAddTen(k,x,-15); intlAddRel(k,x,4);
+   news=A+'与'+X+'签订互不侵犯协定，为期十年。'; break;
+  case 'pressure': intlAddRel(k,x,-5); intlAddTen(k,x,8);
+   if(x==='cn'){
+    if(y<1945){ news=A+'公使照会'+cnGov+'，要求扩大在华'+pk(({br:['商务','内河航行','西藏'],fr:['路矿','传教','滇越铁路'],ru:['中东铁路','外蒙古','路矿'],de:['路矿','商务'],jp:['路矿','驻兵','内河航行','商务'],us:['商务','传教']})[k])+'权益。'; me=intlChina('pressure',k,{国际:-1}); intlDemand(k); }
+    else { news=A+'就'+(({ru:'边界问题',us:intlPRC()?'台湾问题':'驻军与援助条件',jp:'战后赔偿与侨务',br:'香港与侨务',fr:'印度支那问题',de:'贸易问题'})[k])+'向'+cnGov+'提出强硬交涉。'; me=intlChina('pressure',k,{国际:-1}); }
+   } else news=A+'向'+X+'提出强硬照会，两国关系紧张。';
+   break;
+  case 'sanction': I.tr.push({id:'s'+ord+k+x,k:'sanction',a:k,b:x,f:ord,u:ord+730+Math.floor(intlRand()*730)}); intlAddRel(k,x,-6); intlAddTen(k,x,6);
+   if(I.n[x]) I.n[x].eco=intlCl(I.n[x].eco-4,-25,25); n.eco=intlCl(n.eco-1,-25,25);
+   news=A+'对'+X+'实行贸易禁运。'; if(x==='cn') me=intlChina('sanction',k,{经济:-2,财政:-1}); break;
+  case 'loan': I.tr.push({id:'l'+ord+k+x,k:'loan',a:k,b:x,f:ord,u:ord+1825}); intlAddRel(k,x,4);
+   if(x==='cn'){ if(y<1928){ news=A+'银行团向'+cnGov+'提供借款，以关税、盐税作抵。'; me=intlChina('loan',k,{财政:2,国际:-1}); } else { news=A+'向'+cnGov+'提供'+(y<1945?'借款与信用贷款':'长期贷款')+'。'; me=intlChina('loan',k,{财政:2}); } }
+   else { if(I.n[x]) I.n[x].eco=intlCl(I.n[x].eco+3,-25,25); news=A+'向'+X+'提供贷款。'; }
+   break;
+  case 'mediate': intlAddTen(c.x,c.y,-12); intlAddRel(k,c.x,2); intlAddRel(k,c.y,2);
+   news=A+'出面调停'+intlName(c.x,ord)+'与'+intlName(c.y,ord)+'的争端，局势稍缓。';
+   if(c.x==='cn'||c.y==='cn') me=intlChina('mediate',k,{国际:1});
+   break;
+  case 'border': intlAddTen(k,x,6); intlAddRel(k,x,-3);
+   news=A+'在'+intlFront(k,x,y)+'增兵，与'+X+'对峙。'; if(x==='cn') me=intlChina('border',k,{秩序:-1}); break;
+ }
+ n.acts=(n.acts||0)+1; I.dec=(I.dec||0)+1;
+ if(news){
+  intlNews(news,c.a,k,x||'',0,me);
+  if(x==='cn'||c.y==='cn') try{ log('【外事】'+news+(me?'（'+me+'）':'')); }catch(e){}
+  else if(c.a==='ally') try{ log('【列国】'+news); }catch(e){}
+ }
+}
+/* 执掌中枢时，列强照会要你亲自决断（进入弹窗队列，不覆盖其它弹窗） */
+function intlDemand(k){
+ if(!s||!s.isLeader||!intlCentral()) return;
+ var I=s.intl, last=I.ld[k]||-99999, any=I.ld._any||-99999;
+ if(s.cal.ord-last<365||s.cal.ord-any<180) return;   /* 同一国一年至多一次，各国合计半年至多一次 */
+ I.ld[k]=s.cal.ord; I.ld._any=s.cal.ord;
+ dlgOpen('intl',k);
+}
+function intlDemandDlg(k){
+ if(!s||!s.intl||INTL_KEYS.indexOf(k)<0) return false;
+ var A=intlName(k), ord=s.cal.ord;
+ $('dlgTag').textContent='外事 · '+calFmtOrd(ord);
+ $('dlgTitle').textContent=A+'的照会';
+ $('dlgDesc').textContent=A+'公使递来照会，要求扩大在华权益，并暗示若不答应将“自行设法”。眼下与'+A+'的关系 '+Math.round(intlRel(k,'cn'))+'，紧张度 '+Math.round(intlTen(k,'cn'))+'。';
+ var body=$('dlgBody'); body.innerHTML='';
+ var opts=[
+  {t:'据理交涉，寸步不让',d:'民心可用，但对方会更强硬。',run:function(){ intlAddRel(k,'cn',-6); intlAddTen(k,'cn',10); return intlNatl({民心:2,国际:-1})+'；与'+A+'关系 -6'; }},
+  {t:'有限让步，换取缓和',d:'让出一些利权，换几年太平。',run:function(){ intlAddRel(k,'cn',6); intlAddTen(k,'cn',-10); return intlNatl({国际:-2,财政:-1,民心:-2})+'；与'+A+'关系 +6'; }},
+  {t:'拖延不复',d:'先放一放，看对方下一步。',run:function(){ if(intlRand()<0.4){ intlAddRel(k,'cn',-3); intlAddTen(k,'cn',6); return A+'认为受了怠慢，与'+A+'关系 -3'; } return '对方没有再催'; }}
+ ];
+ opts.forEach(function(o){
+  var b=document.createElement('button'); b.className='choice';
+  b.innerHTML='<b>'+o.t+'</b><div class="sub">'+o.d+'</div>';
+  b.onclick=function(){ var r=o.run(); intlNews('你对'+A+'照会的答复：'+o.t+'。','reply',k,'cn',0,r); try{ log('【外事】答复'+A+'照会：'+o.t+'。'+r+'。'); }catch(e){} $('mask').classList.add('hidden'); try{ persist(); render(); }catch(e){} };
+  body.appendChild(b);
+ });
+ $('mask').classList.remove('hidden');
+ return true;
+}
+/* 月度维护：关系向时代基调回归、紧张度回落、条约到期、锁 */
+function intlMaintain(ord,y){
+ var I=s.intl;
+ INTL_KEYS.forEach(function(k){
+  var n=I.n[k];
+  n.mil=intlCl(n.mil*0.97,-25,25); n.eco=intlCl(n.eco*0.97+(n.stab-50)*0.01,-25,25);
+  n.stab=intlCl(n.stab+(62-n.stab)*0.03+(intlRand()-0.5)*1.2,0,100);
+  if(n.stab<25&&intlActive(k,ord)&&intlRand()<0.15) intlNews(intlName(k,ord)+'国内罢工与骚乱频发，政局不稳。','unrest',k,'',0,'');
+ });
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){
+  var a=INTL_ALL[i], b=INTL_ALL[j], r=intlRel(a,b), c=intlClimate(a,b,y);
+  intlTreaties(a,b).forEach(function(t){ if(t.k==='ally') c+=10; else if(t.k==='trade'||t.k==='nap') c+=5; else if(t.k==='sanction') c-=8; });
+  var nr=r+(c-r)*0.04+(intlRand()-0.5)*1.2, c0=intlClimate(a,b,y);
+  if(!intlLock(a,b,ord)) nr=Math.max(c0-30,Math.min(c0+30,nr));   /* 没有史实锁时，AI 只能在时代基调 ±30 之内演化 */
+  intlSetRel(a,b,nr);
+  var tgt=Math.max(0,(55-intlRel(a,b))*1.2);
+  var t=intlTen(a,b); intlSetTen(a,b,t+(tgt-t)*0.06);
+ }
+ /* 条约到期 / 破裂 */
+ I.tr=I.tr.filter(function(t){
+  var r=intlRel(t.a,t.b), A=intlName(t.a,ord), B=intlName(t.b,ord), dead=false, why='';
+  if(t.u&&ord>=t.u&&t.k==='trade'&&r>=60){ t.u=ord+3650; return true; }   /* 关系仍好：通商协定自动续约 */
+  if(t.u&&ord>=t.u){ dead=true; why=t.k==='sanction'?A+'解除对'+B+'的禁运。':(t.k==='loan'?A+'对'+B+'的借款到期结清。':A+'与'+B+'的'+(t.k==='trade'?'通商协定':'互不侵犯协定')+'期满。'); }
+  else if(t.k==='ally'&&(r<55||intlClimate(t.a,t.b,y)<45)){ dead=true; why=A+'与'+B+'的同盟名存实亡。'; }
+  else if(t.k==='trade'&&r<38){ dead=true; why=A+'与'+B+'交恶，通商协定中止。'; }
+  else if(t.k==='nap'&&r<25){ dead=true; why=A+'与'+B+'的互不侵犯协定破裂。'; }
+  else if(t.k==='sanction'&&r>50){ dead=true; why=A+'与'+B+'关系缓和，禁运解除。'; }
+  else { var L=intlLock(t.a,t.b,ord); if(L&&(L.k==='war'||L.k==='clash')&&t.k!=='sanction'){ dead=true; why=A+'与'+B+'兵戎相见，原有条约作废。'; } }
+  if(dead){ intlNews(why,t.k+'-end',t.a,t.b,0,''); if(t.a==='cn'||t.b==='cn') try{ log('【外事】'+why); }catch(e){} }
+  return !dead;
+ });
+ intlApplyLocks(ord);
+ /* 列强对华关系的平均水平，慢慢影响国际地位（累积到整数才落账） */
+ var sum=0; INTL_KEYS.forEach(function(k){ sum+=intlRel(k,'cn'); });
+ I.acc=(+I.acc||0)+Math.max(-0.3,Math.min(0.3,(sum/INTL_KEYS.length-48)/100));
+ if(Math.abs(I.acc)>=1&&s.natl){ var d=I.acc>0?1:-1; s.natl.国际=clamp((+s.natl.国际||0)+d); I.acc-=d; }
+ /* 军政页“列强”的实力与 AI 的国力一致 */
+ initPowers(); INTL_KEYS.forEach(function(k){ var P=s.__powers[INTL_POW[k]]; if(P) P.p=Math.round(intlPower(k,y)); });
+}
+function intlRunMonth(mk){
+ var I=s.intl, ord=s.cal.ord, y=calFromOrd(ord).y;
+ I.last=mk;                                   /* 先落标记：即使下面出错也不会重算本月 */
+ intlMaintain(ord,y);
+ INTL_KEYS.forEach(function(k){
+  if(!intlActive(k,ord)&&!(k==='jp'||k==='de')) return;
+  var P=intlPers(k,y), act=0.14+P.act/260;
+  if(!intlActive(k,ord)) act=0.08;
+  if(intlRand()>act) return;
+  var cs=intlCandidates(k,ord,y).filter(function(c){ return c.u>14; });
+  if(!intlActive(k,ord)) cs=cs.filter(function(c){ return c.a==='reform'; });
+  if(!cs.length) return;
+  cs.sort(function(a,b){ return b.u-a.u; });
+  cs=cs.slice(0,3);
+  var tot=0; cs.forEach(function(c){ tot+=c.u*c.u; });
+  var r=intlRand()*tot, pick=cs[0];
+  for(var i=0;i<cs.length;i++){ r-=cs[i].u*cs[i].u; if(r<=0){ pick=cs[i]; break; } }
+  intlDo(k,pick,ord,y);
+ });
+ if(window.__intlHook) try{ window.__intlHook(mk); }catch(e){}
+}
+function intlMonth(now){
+ if(!s||!s.cal||s.dead) return;
+ var I=intlEnsure(); if(!I) return;
+ var key=intlMonthKey(now||calFromOrd(s.cal.ord));
+ if(key<=I.last) return;                       /* 本月已决策：重复调用直接忽略 */
+ var t0=intlNowMs();
+ var from=Math.max(I.last+1,key-36);           /* 正常只差一个月；万一漏了（不应发生）最多补三年 */
+ for(var mk=from;mk<=key;mk++) intlRunMonth(mk);
+ var dt=intlNowMs()-t0; INTL_PERF.n++; INTL_PERF.total+=dt; if(dt>INTL_PERF.max) INTL_PERF.max=dt;
+}
+/* 玩家宣战/和谈等改了对华关系后，锁立即生效 */
+function intlWarRisk(){
+ if(!s||!s.intl) return [];
+ var out=[], ord=s.cal.ord;
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){
+  var a=INTL_ALL[i], b=INTL_ALL[j], t=intlTen(a,b), L=intlLock(a,b,ord);
+  if(t>=75&&!(L&&(L.k==='war'||L.k==='clash'))) out.push({a:a,b:b,tension:t,rel:intlRel(a,b)});
+ }
+ return out.sort(function(x,y){ return y.tension-x.tension; });
+}
+/* 商人：列国通商与禁运影响铺面进项 */
+function intlTradeFactor(x){
+ if(!x||!x.intl||!x.cal) return 0;
+ var f=0, ord=x.cal.ord;
+ (x.intl.tr||[]).forEach(function(t){ if(t.a==='cn'||t.b==='cn'){ if(t.k==='trade') f+=0.06; if(t.k==='sanction') f-=0.12; } });
+ var sum=0; INTL_KEYS.forEach(function(k){ sum+=intlRel(k,'cn'); }); f+=(sum/INTL_KEYS.length-50)/250;
+ INTL_KEYS.forEach(function(k){ var L=intlLock(k,'cn',ord); if(L&&L.k==='war') f-=0.08; });
+ return Math.max(-0.35,Math.min(0.3,Math.round(f*100)/100));
+}
+
+/* ---------- 时局栏：列国局势 ---------- */
+function intlStance(r){ return r>=72?'亲密':r>=58?'友好':r>=42?'平常':r>=28?'冷淡':'敌对'; }
+function intlEsc(t){ return String(t==null?'':t).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function intlLead(ord){
+ var wars=[], seen={};
+ INTL_HIST.forEach(function(h){ if(h.k==='war'&&intlHistOn(h,ord)){ var t=h.t.split(/[：，。]/)[0]; if(!seen[t]){ seen[t]=1; wars.push(t); } } });
+ if(wars.length) return wars.slice(0,2).join('；')+'，仍在进行。';
+ var top=null;
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){ var a=INTL_ALL[i], b=INTL_ALL[j], t=intlTen(a,b); if(!top||t>top.t) top={a:a,b:b,t:t}; }
+ if(top&&top.t>=55) return intlName(top.a,ord)+'与'+intlName(top.b,ord)+'关系紧张。';
+ return '列国之间大体相安。';
+}
+function intlCardHTML(){
+ var I=s.intl, ord=s.cal.ord, o=calFromOrd(ord), y=o.y;
+ var h='<p class="intl-lead"><span class="intl-date">'+o.y+'年'+o.m+'月</span>'+intlEsc(intlLead(ord))+'</p>';
+ h+='<div class="intl-head small muted"><span>国家 · 政体</span><span>国力</span><span>对华</span></div><div class="intl-rows">';
+ INTL_KEYS.forEach(function(k){
+  var pw=Math.round(intlPower(k,y)), r=Math.round(intlRel(k,'cn')), L=intlLock(k,'cn',ord), g=intlGoal(k,y), act=intlActive(k,ord);
+  h+='<div class="intl-row'+(act?'':' off')+'"><div class="intl-n"><b>'+intlName(k,ord)+'</b><span>'+intlRegime(k,y)[0]+' · '+g[2]+'</span></div>'+
+   '<div class="intl-p"><span class="bar"><i style="width:'+pw+'%"></i></span><em>'+pw+'</em></div>'+
+   '<div class="intl-r'+(r<28||L&&(L.k==='war'||L.k==='clash')?' neg':(r>=58?' pos':''))+'">'+(L&&L.k!=='nap'?INTL_LOCK_TXT[L.k]:intlStance(r))+' <em>'+r+'</em></div></div>';
+ });
+ h+='</div>';
+ /* 同盟与条约：史实在前，AI 在后 */
+ var tl=[], seen={};
+ INTL_HIST.forEach(function(H){
+  if(!intlHistOn(H,ord)||H.k==='hostile') return;
+  H.ab.forEach(function(p){ var key=intlPK(p[0],p[1])+H.k; if(seen[key]) return; seen[key]=1; tl.push({t:intlName(p[0],ord)+' — '+intlName(p[1],ord),k:INTL_LOCK_TXT[H.k],f:H.f[0],h:1,neg:H.k==='war'||H.k==='clash'}); });
+ });
+ (I.tr||[]).forEach(function(t){ if(t.k==='loan') return; tl.push({t:intlName(t.a,ord)+' — '+intlName(t.b,ord),k:({trade:'通商',ally:'同盟',nap:'互不侵犯',sanction:'禁运'})[t.k]||t.k,f:calFromOrd(t.f).y,h:0,neg:t.k==='sanction'}); });
+ if(tl.length){
+  h+='<div class="intl-sec"><b>同盟与条约</b><ul class="intl-list">'+tl.slice(0,8).map(function(x){ return '<li><span>'+x.t+'</span><span class="'+(x.neg?'neg':'')+'">'+x.k+'</span><span class="small muted">'+x.f+'年起'+(x.h?' · 史实':'')+'</span></li>'; }).join('')+'</ul>'+(tl.length>8?'<p class="small muted">另有 '+(tl.length-8)+' 项。</p>':'')+'</div>';
+ }
+ /* 紧张局势：给 V4.20 的接口在这里可见 */
+ var ts=[];
+ for(var i=0;i<INTL_ALL.length;i++) for(var j=i+1;j<INTL_ALL.length;j++){ var a=INTL_ALL[i], b=INTL_ALL[j], L2=intlLock(a,b,ord); if(L2&&(L2.k==='war'||L2.k==='clash')) continue; ts.push({a:a,b:b,t:intlTen(a,b)}); }
+ ts.sort(function(p,q){ return q.t-p.t; }); ts=ts.filter(function(x){ return x.t>=30; }).slice(0,3);
+ if(ts.length){
+  h+='<div class="intl-sec"><b>紧张局势</b>'+ts.map(function(x){ var v=Math.round(x.t); return '<div class="intl-ten"><span>'+intlName(x.a,ord)+' — '+intlName(x.b,ord)+'</span><span class="bar"><i class="'+(v>=75?'hot':(v>=55?'warm':''))+'" style="width:'+v+'%"></i></span><em>'+v+'</em></div>'; }).join('')+'</div>';
+ }
+ var news=(I.news||[]).slice(0,6);
+ h+='<div class="intl-sec"><b>近来动向</b>'+(news.length?'<ul class="intl-news">'+news.map(function(nw){ var d=calFromOrd(nw.o); return '<li><span class="intl-nd">'+(d.y!==y?d.y+'年':'')+d.m+'月'+d.d+'日</span><span>'+intlEsc(nw.t)+(nw.h?'<i class="intl-tag">史实</i>':'')+(nw.me?'<span class="intl-me">'+intlEsc(nw.me)+'</span>':'')+'</span></li>'; }).join('')+'</ul>':'<p class="small muted">尚无新的动向。</p>')+'</div>';
+ h+='<p class="small muted intl-foot">各国每月初评估一次局势，按国力、利益、性格与彼此关系作决策；史实大事按日期发生。数值为游戏估算。</p>';
+ return h;
+}
+var INTL_SIG='';
+function intlRender(){
+ if(!s||!s.intl) return;
+ var card=document.getElementById('cardIntl');
+ if(!card){
+  var main=document.querySelector('#game .main > div'); if(!main) return;
+  card=document.createElement('div'); card.className='card'; card.id='cardIntl';
+  card.innerHTML='<h2>列国局势</h2><div id="intlBox"></div>';
+  var after=document.getElementById('cardDynamicWorld');
+  if(after&&after.parentNode===main) main.insertBefore(card,after.nextSibling); else main.appendChild(card);
+ }
+ var sig=s.cal.ord+'|'+s.intl.last+'|'+s.intl.news.length+'|'+(s.intl.news[0]?s.intl.news[0].o+s.intl.news[0].t:'')+'|'+INTL_KEYS.map(function(k){ return Math.round(intlRel(k,'cn')); }).join(',');
+ if(sig===INTL_SIG&&document.getElementById('intlBox')&&document.getElementById('intlBox').innerHTML) return;
+ INTL_SIG=sig;
+ var box=document.getElementById('intlBox'); if(box) box.innerHTML=intlCardHTML();
+}
+TAB_TITLE['列国局势']='pol';
+
+/* ---------- 弹窗排队：一次只显示一个，关掉一个再弹下一个 ----------
+   年终结算（定国策、天下大势等）与列强照会不再直接写弹窗，而是登记到 s.cal.dlgQ（随存档保存），
+   由 calFlush 依次弹出：年度报告 → 队列 → 到期的历史事件。 */
+var DLGQ_OPEN={
+ policy:function(){ if(!s||!s.isLeader||s.dead) return false; openPolicy(); return true; },
+ verdict:function(){ return verdictDlg(); },
+ intl:function(k){ return intlDemandDlg(k); }
+};
+function dlgQueue(){ if(!s||!s.cal) return []; if(!Array.isArray(s.cal.dlgQ)) s.cal.dlgQ=[]; return s.cal.dlgQ; }
+function dlgShown(){ var m=document.getElementById('mask'); return !!(m&&m.classList&&!m.classList.contains('hidden')); }
+function dlgRun(e){
+ var f=DLGQ_OPEN[e.kind]; if(!f) return false;
+ try{ return f(e.arg)!==false&&dlgShown(); }catch(err){ if(window.console) console.error(err); return false; }
+}
+function dlgOpen(kind,arg){
+ if(!s) return false;
+ var q=dlgQueue(), key=kind+':'+(arg==null?'':arg);
+ for(var i=0;i<q.length;i++){ if(q[i].key===key) return false; }   /* 同一个弹窗不排两次 */
+ var e={kind:kind,arg:arg==null?null:arg,key:key};
+ if(!CLOCK.settling&&!calBlocked()&&!s.cal.pendingReport&&!q.length&&!(SP&&SP.cur)) return dlgRun(e);
+ q.push(e); return true;
+}
+function dlgNext(){
+ var q=dlgQueue();
+ while(q.length){ var e=q.shift(); if(dlgRun(e)) return true; }
+ return false;
+}
+var _calFlushV419=calFlush;
+calFlush=function(){
+ if(!s) return;
+ if(s.cal.pendingReport){ calShowReport(); return; }
+ if(!calBlocked()&&dlgQueue().length&&!s.dead){ if(dlgNext()) return; }
+ return _calFlushV419.apply(this,arguments);
+};
+window.__CAL.flush=calFlush;
+
+/* ---------- 挂到统一的日推进流程 ---------- */
+var _calMonthTickV419=calMonthTick;
+calMonthTick=function(now){
+ try{ intlMonth(now); }catch(e){ if(window.console) console.error(e); }   /* 先决策再走月度生计与自动存档，存档里就有本月的决策 */
+ return _calMonthTickV419.apply(this,arguments);
+};
+var _calDayTickV419=calDayTick;
+calDayTick=function(now){
+ try{ if(s&&s.cal) intlEnsure(); if(s&&s.intl&&s.cal.ord>=s.intl.hn) intlDay(now); }catch(e){ if(window.console) console.error(e); }
+ return _calDayTickV419.apply(this,arguments);
+};
+var _econItemsV419=econItems;
+econItems=function(x){
+ var it=_econItemsV419.apply(this,arguments);
+ try{
+  if(x&&x.intl&&LIVE_LINE[x.role]==='biz'&&!x.isLeader&&!x.isThrone){
+   var f=intlTradeFactor(x), base=PAY_TAB.biz[Math.max(0,Math.min(7,x.rank||0))]||0, v=_r2(base*f);
+   if(Math.abs(v)>=0.01) it.pay.push([f>0?'外贸行情（列国通商）':'外贸行情（禁运、交恶）',v]);
+  }
+ }catch(e){}
+ return it;
+};
+window.__econItems=econItems;
+/* 1958：大跃进（5 月 5 日）与人民公社化（8 月 29 日）是两件事，按日期各触发一次；
+   非“中共胜利”路线下，1958 年这两件事不会发生（没有对应的替代事件）。 */
+var V419_PRC_ONLY=['greatleap58','leap58'];
+function v419Skip(fn){
+ var tmp=[];
+ if(s&&s.evDone&&!intlPRC()) V419_PRC_ONLY.forEach(function(id){ if(!s.evDone[id]){ s.evDone[id]=true; tmp.push(id); } });
+ try{ return fn(); }finally{ tmp.forEach(function(id){ delete s.evDone[id]; }); }
+}
+var _maybeEventV419=maybeEvent;
+maybeEvent=function(){ var self=this, a=arguments; return v419Skip(function(){ return _maybeEventV419.apply(self,a); }); };
+var _waitNextV419=waitNextEventOrd;
+waitNextEventOrd=function(){ var self=this, a=arguments; return v419Skip(function(){ return _waitNextV419.apply(self,a); }); };
+window.__CAL.nextEventOrd=waitNextEventOrd;
+
+var _initV419=init;
+init=function(){
+ var r=_initV419.apply(this,arguments);
+ if(s){ s.intl=null; if(s.cal) s.cal.dlgQ=[]; intlInit(true); INTL_SIG=''; try{ intlRender(); }catch(e){} }
+ return r;
+};
+var _applySaveV419=applySave;
+applySave=function(d){
+ var r=_applySaveV419.apply(this,arguments);
+ if(s){
+  var had=!!(s.intl&&s.intl.n);
+  if(!had) intlInit(false);       /* V4.18.6 及更早的存档：没有 AI 状态，按存档日期初始化 */
+  intlEnsure(); dlgQueue();
+  INTL_SIG='';
+  try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
+ }
+ return r;
+};
+var _packV419=packSave;
+packSave=function(){ var o=_packV419.apply(null,arguments); o.v='4.19'; return o; };
+var _renderV419=render;
+render=function(){
+ _renderV419.apply(null,arguments);
+ if(!s) return;
+ try{ intlEnsure(); intlRender(); }catch(e){ if(window.console) console.error(e); }
+};
+window.__INTL={
+ state:function(){ return s&&s.intl; }, rel:intlRel, tension:intlTen, lock:function(a,b){ return intlLock(a,b); }, power:function(k){ return intlPower(k,s.year); },
+ name:intlName, keys:INTL_KEYS, all:INTL_ALL, hist:INTL_HIST, warRisk:intlWarRisk, perf:INTL_PERF, month:intlMonth, init:intlInit,
+ tradeFactor:intlTradeFactor, render:intlRender, html:function(){ return intlCardHTML(); }, climate:intlClimate
+};
+window.__DLGQ={queue:dlgQueue,open:dlgOpen,next:dlgNext};
 
 window.__V4185NET=1;
 })(); /* 主作用域结束 */

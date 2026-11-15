@@ -519,3 +519,37 @@ div[style*="opacity:.45"] > *{color:var(--ink-3);border-style:dashed}
 }
 .ph-cap .ph-i,.ph-src{white-space:nowrap}
 .ph-cap .ph-a{white-space:normal}
+
+/* ---------- V4.19 列国局势 ---------- */
+.intl-lead{margin:0 0 var(--sp-3);font-family:var(--serif);font-size:var(--fs-md);line-height:1.6;color:var(--ink-1)}
+.intl-date{display:inline-block;margin-right:var(--sp-2);color:var(--seal);font-family:var(--sans);font-size:var(--fs-sm);font-weight:600;font-variant-numeric:tabular-nums}
+.intl-head,.intl-row{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,.9fr);gap:var(--sp-3);align-items:center}
+.intl-head{padding:0 0 var(--sp-1);border-bottom:1px solid var(--rule-strong);font-size:var(--fs-xs)}
+.intl-head span:nth-child(n+2){text-align:right}
+.intl-rows{margin:0 0 var(--sp-4)}
+.intl-row{padding:var(--sp-2) 0;border-bottom:1px solid var(--rule);transition:background-color var(--dur-2) var(--ease-std)}
+.intl-row.off{opacity:.55}
+.intl-n b{display:block;font-size:var(--fs-md);font-weight:600;color:var(--ink-1)}
+.intl-n span{display:block;font-size:var(--fs-xs);color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.intl-p{display:flex;align-items:center;gap:var(--sp-2)}
+.intl-p .bar,.intl-ten .bar{flex:1;margin:0;display:block;height:4px;background:var(--track);border-radius:2px;overflow:hidden}
+.intl-p .bar i,.intl-ten .bar i{display:block;height:100%;background:var(--data);border-radius:2px;transition:width var(--dur-4) var(--ease-out)}
+.intl-ten .bar i{background:var(--ink-3)}
+.intl-ten .bar i.warm{background:var(--warn)}
+.intl-ten .bar i.hot{background:var(--seal)}
+.intl-p em,.intl-r em,.intl-ten em{font-style:normal;font-variant-numeric:tabular-nums;font-size:var(--fs-sm);color:var(--ink-2);min-width:2ch;text-align:right}
+.intl-r{text-align:right;font-size:var(--fs-sm);color:var(--ink-2)}
+.intl-r.pos{color:var(--pos)}
+.intl-r.neg{color:var(--seal)}
+.intl-sec{margin:0 0 var(--sp-4)}
+.intl-sec>b{display:block;margin:0 0 var(--sp-2);font-size:var(--fs-sm);font-weight:600;color:var(--ink-2);letter-spacing:.06em}
+.intl-list,.intl-news{list-style:none;margin:0;padding:0}
+.intl-list li{display:grid;grid-template-columns:minmax(0,1fr) auto auto;gap:var(--sp-3);padding:var(--sp-1) 0;border-bottom:1px solid var(--rule);font-size:var(--fs-sm);align-items:baseline}
+.intl-list li .neg{color:var(--seal)}
+.intl-ten{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr) auto;gap:var(--sp-3);align-items:center;padding:var(--sp-1) 0;font-size:var(--fs-sm)}
+.intl-news li{display:grid;grid-template-columns:5.5em minmax(0,1fr);gap:var(--sp-3);padding:var(--sp-2) 0;border-bottom:1px solid var(--rule);font-size:var(--fs-sm);line-height:1.6}
+.intl-nd{color:var(--ink-3);font-variant-numeric:tabular-nums}
+.intl-tag{display:inline-block;margin-left:var(--sp-2);padding:0 var(--sp-1);border:1px solid var(--rule-strong);border-radius:var(--r-1);font-style:normal;font-size:var(--fs-xs);color:var(--ink-3)}
+.intl-me{display:block;margin-top:var(--sp-1);color:var(--seal);font-size:var(--fs-xs)}
+.intl-foot{margin:var(--sp-3) 0 0}
+@media (prefers-reduced-motion:reduce){.intl-p .bar i,.intl-ten .bar i,.intl-row{transition:none}}
