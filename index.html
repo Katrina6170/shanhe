@@ -2,24 +2,19 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>山河：1840—1972 · V4.18.5</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>山河：1840—1972 · V4.18.6</title>
 <meta name="description" content="山河：1840—1972，中国近代史人生模拟。">
-<meta name="theme-color" content="#a23a2c">
-<link rel="stylesheet" href="style.css?v=4185">
+<meta name="theme-color" content="#f4f0e6">
+<link rel="stylesheet" href="style.css?v=4186">
 </head>
 <body>
 <div id="hud">
   <div class="hud-l"><b id="hudName">—</b><span id="hudRole" class="hud-sub"></span></div>
   <div class="hud-clock" id="hudClock">
     <b id="hudYear" class="hud-date">—</b>
-    <span id="hudSpeed" class="hud-spd paused">已暂停</span>
-    <span class="tc" role="group" aria-label="时间控制">
-      <button type="button" data-spd="0" title="暂停（空格键）">暂停</button>
-      <button type="button" data-spd="1" title="1 天/秒">正常</button>
-      <button type="button" data-spd="2" title="5 天/秒">快速</button>
-      <button type="button" data-spd="3" title="20 天/秒">极速</button>
-    </span>
+    <span id="hudSpeed" class="hud-spd"></span>
+    <button type="button" id="btnWait" class="hud-wait" title="什么也不做，让日子过去">静待时日</button>
   </div>
   <div class="hud-m">
     <span><i>年龄</i><b id="hudAge">—</b></span>
@@ -44,7 +39,8 @@
     <h1>山河</h1>
     <p>1840—1972 · 中国近代史人生模拟</p>
   </div>
-  <div class="stamp">V4.18.5 · 按天计时与真实生计</div>
+  <div class="stamp">V4.18.6</div>
+  <p class="era-credit" id="eraCredit"></p>
 </header>
 
 <section id="setup">
@@ -101,7 +97,7 @@
       </div>
     </div>
     <p class="small" id="hint" style="margin-top:5px"></p>
-    <button class="btn primary block" id="btnBegin" style="margin-top:8px">进入时代 →</button>
+    <button class="btn primary block" id="btnBegin" style="margin-top:8px">进入时代</button>
     <button class="btn block ghost" id="btnRandom" style="margin-top:8px">随机开局（帮你掷一副命）</button>
     <div class="small muted" id="rollHint" style="margin-top:6px"></div>
   </div>
@@ -154,6 +150,7 @@
       <div class="card">
         <h2>时代纪事</h2>
         <div class="evt" id="curEvent">你进入了这个时代。</div>
+        <div class="ev-gallery" id="evGallery"></div>
       </div>
 
       <div class="card">
@@ -241,9 +238,9 @@
     </div>
     <div class="card">
       <h2>存档</h2>
-      <div class="small muted" style="margin-bottom:6px">每月 1 日自动存档（读档后时间处于暂停）；三个手动槽可以各存一份人生。</div>
+      <div class="small muted" style="margin-bottom:6px">每月 1 日自动存档；三个手动槽可以各存一份人生。读档后日期停在存档那天，只随行动与「静待时日」推进。</div>
       <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap">
-        <select id="slotSel" style="padding:6px 8px">
+        <select id="slotSel" class="slot-sel">
           <option value="auto">自动存档</option>
           <option value="1">手动槽 1</option>
           <option value="2">手动槽 2</option>
@@ -259,12 +256,12 @@
         <input type="file" id="fileImport" accept=".json,application/json" style="display:none">
         <button class="btn sm" id="btnReset">重开</button>
       </div>
-      <div class="small" id="slotInfo" style="margin-top:6px;color:#8a8175"></div>
+      <div class="small muted" id="slotInfo" style="margin-top:6px"></div>
       <span class="small muted" id="saveMsg"></span>
     </div>
   </div>
 
-  <div class="card"><p class="small muted" style="margin:0">原型作品。省界数据来自阿里云 DataV，人物关系与军事为模拟设定。</p></div>
+  <div class="card"><p class="small muted" style="margin:0">原型作品。省界数据来自阿里云 DataV，人物关系与军事为模拟设定。历史照片来自 Wikimedia Commons，逐张署名见事件弹窗。</p><p class="small muted era-credit-game" id="eraCreditGame" style="margin:var(--sp-1) 0 0"></p></div>
 </section>
 
 <div class="footer">SHANHE · 1840—1972</div>
@@ -272,6 +269,7 @@
 
 <div class="mask hidden" id="mask">
   <div class="dialog">
+    <figure class="dlg-media" id="dlgMedia" hidden></figure>
     <div class="tag" id="dlgTag"></div>
     <h2 id="dlgTitle"></h2>
     <p class="small muted" id="dlgDesc"></p>
@@ -294,9 +292,9 @@ window.addEventListener('error',function(e){
 });
 window.addEventListener('unhandledrejection',function(e){ __showErr('promise: '+(e.reason&&e.reason.message||e.reason)); });
 </script>
-<script src="china.js?v=4185"></script>
-<script src="world.js?v=4185"></script>
-<script src="app.js?v=4185" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<script src="china.js?v=4186"></script>
+<script src="world.js?v=4186"></script>
+<script src="app.js?v=4186" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
 <div id="tipFloat"></div>
 </body>
 </html>

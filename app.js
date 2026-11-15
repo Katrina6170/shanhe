@@ -54,13 +54,13 @@ function calEnsure(st){
  if(!st) return null;
  var y=Math.round(+st.year||CAL_START_YEAR);
  if(!st.cal||typeof st.cal!=='object'||typeof st.cal.ord!=='number'||!isFinite(st.cal.ord)){
-  st.cal={ord:calOrd(y,1,1),lastSettledYear:y-1,speedPref:1,finished:false};
+  st.cal={ord:calOrd(y,1,1),lastSettledYear:y-1,finished:false};
  }else if(!(CLOCK&&CLOCK.settling)&&calFromOrd(st.cal.ord).y!==y){
   /* s.year 是旧系统读取的年份镜像；两者不一致时以 s.year 为准重新对齐到该年 1 月 1 日。 */
   st.cal.ord=calOrd(y,1,1);
  }
  if(typeof st.cal.lastSettledYear!=='number') st.cal.lastSettledYear=y-1;
- if(typeof st.cal.speedPref!=='number'||st.cal.speedPref<1||st.cal.speedPref>3) st.cal.speedPref=1;
+ if('speedPref' in st.cal) delete st.cal.speedPref;   /* V4.18.6：不再有速度 */
  st.cal.finished=!!st.cal.finished;
  if(!st.cooldowns||typeof st.cooldowns!=='object'||Array.isArray(st.cooldowns)) st.cooldowns={};
  if(!Array.isArray(st.jobs)) st.jobs=[];
@@ -1381,7 +1381,7 @@ function render(){
   $('x'+cap(k)).textContent=Math.floor(e)+'/100';
  });
 
- $('tAp').textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'按天计时';
+ $('tAp').textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'';
  $('rName').textContent=(window.rankTitleOf?window.rankTitleOf():F.ladder[rank]);
  var avg=(s.skill+s.fame+s.power+s.trust)/4;
  var next=rank>=7?null:GATE[rank+1];
@@ -1401,7 +1401,7 @@ function render(){
  $('peopleBox').innerHTML=ps.map(function(p){
   var r=getRel(p.n),cls=r>=70?'hi':r<=30?'lo':'';
   var st=pstateOf(p.n);
-  var stTag=st&&st.state==='fallen'?'<span class="clq" style="color:#8c2b22">已失势</span>':st&&st.state==='promoted'?'<span class="clq" style="color:#4e6b4a">已升迁</span>':'';
+  var stTag=st&&st.state==='fallen'?'<span class="clq" style="color:var(--seal)">已失势</span>':st&&st.state==='promoted'?'<span class="clq" style="color:var(--pos)">已升迁</span>':'';
   return '<div class="person"><div class="phead"><b>'+p.n+'</b>'+stTag+
    '<span class="clq">'+(p.cl||'—')+'</span><span class="rel '+cls+'">'+r+'</span></div>'+
    '<div class="pdesc">'+p.d+'</div>'+
@@ -2139,9 +2139,9 @@ function yearTick(){
 /* ---------- 渲染 ---------- */
 function bar(label,v){
  v=clamp(v);
- return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:64px;color:#8a8175;font-size:12px">'+label+'</span>'+
-  '<span style="flex:1;height:6px;background:#e6dfd0;position:relative"><span style="position:absolute;left:0;top:0;bottom:0;width:'+v+'%;background:#6b7a5c"></span></span>'+
-  '<span style="width:28px;text-align:right;font-size:12px;color:#5c5346">'+Math.round(v)+'</span></div>';
+ return '<div style="display:flex;align-items:center;gap:8px;margin:3px 0"><span style="width:64px;color:var(--ink-2);font-size:12px">'+label+'</span>'+
+  '<span style="flex:1;height:6px;background:var(--track);position:relative"><span style="position:absolute;left:0;top:0;bottom:0;width:'+v+'%;background:var(--data)"></span></span>'+
+  '<span style="width:28px;text-align:right;font-size:12px;color:var(--ink-1)">'+Math.round(v)+'</span></div>';
 }
 
 function renderExt(){
@@ -2480,7 +2480,7 @@ function renderWho(){
  far=far.slice(0,4);
  var h='<div style="display:flex;flex-wrap:wrap;gap:6px">';
  out.forEach(function(p){
-  h+='<button class="btn sm" data-who="'+p.n+'">'+p.n+'<span style="color:#8a8175"> · '+(FAC[p.f]?FAC[p.f].name.split(' ')[0]:'')+'</span></button>';
+  h+='<button class="btn sm" data-who="'+p.n+'">'+p.n+'<span style="color:var(--ink-3)"> · '+(FAC[p.f]?FAC[p.f].name.split(' ')[0]:'')+'</span></button>';
  });
  h+='</div>';
  if(far.length){
@@ -4104,7 +4104,7 @@ window.__declWarV4=function(p){
   set('hudName', s.name||'—');
   var RN={soldier:'士兵',officer:'军官',official:'文官',student:'学生',merchant:'商人',revolutionary:'革命者'};
   var role=s.isThrone?'皇帝':(s.isLeader?'领袖':(s.roleName||RN[s.role]||s.role||'—'));
-  set('hudRole', role+' · '+(s.tierName||''));
+  set('hudRole', role+(s.tierName?' · '+s.tierName:''));
   var FACN={qing:'清',beiyang:'北洋',kmt:'国民党',cpc:'中共',local:'地方',civil:'民间'};
   var age=(s.age!==undefined&&s.age!==null)?s.age:(s.birth?(s.year-s.birth):'—');
   set('hudYear', s.cal?calFmtOrd(s.cal.ord):((s.year||'—')+'年'));
@@ -4200,7 +4200,7 @@ window.__declWarV4=function(p){
   var mood=r>1.6?'我军压着打':(r>1.1?'我军略占上风':(r>0.9?'僵持':(r>0.5?'我军吃力':'我军顶不住')));
   var d=w.war.day||0;
   var html='<div class="v41c-battle" style="margin:4px 0 8px">'+
-   '<div class="small" style="color:#5c5346;margin-bottom:4px">战况：<b>'+mood+'</b>　交兵 '+Math.floor(d/30)+' 个月 '+(d%30)+' 天</div>'+
+   '<div class="small" style="color:var(--ink-2);margin-bottom:4px">战况：<b>'+mood+'</b>　交兵 '+Math.floor(d/30)+' 个月 '+(d%30)+' 天</div>'+
    '<div class="pwr"><b>敌方士气</b><span class="pb"><i style="width:'+Math.max(0,Math.min(100,en.mor||0))+'%;background:#7d4f4f"></i></span><em>'+Math.round(en.mor||0)+'</em></div>'+
    '</div>';
   box.insertAdjacentHTML('afterbegin',html);
@@ -4352,7 +4352,7 @@ window.v4L = window.v4L || function(t){
     '<button class="btn" data-m="chat">坐下聊两句（此次拜会可聊 3 次）</button>'+
     '<button class="btn" data-m="gift">送点东西（20 两，好感 +8）</button>'+
     '<button class="btn" data-m="out">告辞</button>'+
-   '</div><div id="v42say" class="small" style="margin-top:10px;color:#5c5346"></div></div>';
+   '</div><div id="v42say" class="small" style="margin-top:10px;color:var(--ink-2)"></div></div>';
   document.body.appendChild(d);
   function paint(){
    var r=Math.round(relOf(ST(),name));
@@ -6351,7 +6351,7 @@ function calShowReport(){
  var r=s.cal.pendingReport; s.cal.pendingReport=null;
  $('dlgTag').textContent='年度报告 · '+r.y+'年';
  $('dlgTitle').textContent=r.y+'年度报告';
- $('dlgDesc').textContent=r.y+'年12月31日结束，年度结算已完成。时间已暂停，看完后自动继续。';
+ $('dlgDesc').textContent=r.y+'年12月31日结束，年度结算已完成。看完后，正在办理的事或静待会接着走完。';
  $('dlgBody').innerHTML='<div class="yr-report">'+calReportHTML(r)+'</div><button class="choice" id="yrOk" style="text-align:center"><b>知道了，进入'+(r.y+1)+'年</b></button>';
  $('mask').classList.remove('hidden');
  var b=document.getElementById('yrOk'); if(b) b.onclick=function(){ $('mask').classList.add('hidden'); };
@@ -6423,7 +6423,7 @@ function calStepDay(){
  var before=calFromOrd(c.ord);
  c.ord+=1;
  var now=calFromOrd(c.ord);
- if(now.y!==before.y){ calYearEnd(before.y); if(!s.dead&&s.year!==now.y) s.year=now.y; }
+ if(now.y!==before.y){ calYearEnd(before.y); if(!s.dead&&s.year!==now.y) s.year=now.y; head=s.logs[0]; }   /* V4.18.6：年终结算产生的纪事已写进年度报告，不再触发「重大事件」暂停 */
  if(s.dead){ CLOCK.speed=0; CLOCK.needRender=true; return true; }
  if(now.d===1) calMonthTick(now);
  calDayTick(now);
@@ -6587,7 +6587,7 @@ init=function(){
  if(!s) return;
  calInitState(true);
  CLOCK.speed=0; CLOCK.evOrd=null;
- log('【历法】'+calFmtOrd(s.cal.ord)+'，时间已暂停。点顶部「正常」开始推进；空格键可暂停/继续。');
+ log('【历法】'+calFmtOrd(s.cal.ord)+'。时间只随你做的事推进：每件事标着约需天数；想让日子过去，点顶部「静待时日」。');
  try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
  calClockUI(true);
 };
@@ -7467,7 +7467,7 @@ calRenderJobs=function(){
   var tot=Math.max(1,j.end-j.start), pct=Math.max(0,Math.min(100,Math.round((today-j.start)/tot*100)));
   h+='<div class="cal-job"><div class="small"><b>'+j.label+'</b> · 预计 '+calFmtOrd(j.end)+' 完成（还需 '+Math.max(0,j.end-today)+' 天）</div><div class="bar"><i style="width:'+pct+'%"></i></div></div>';
  });
- if(!h) h='<div class="small muted">每件事都要花时间：按钮上标着大约天数，确认后日历随即推进。</div>';
+ if(!h) h='';   /* V4.18.6：无在建工程时不重复说明（卡片顶部已有） */
  if(box.innerHTML!==h) box.innerHTML=h;
 };
 ACT_HINT_TEXT='每件事都要花时间：按钮上标着大约天数（随能力、职位、人脉与时局浮动）；确认后日历随即推进，期间每月照常结算生计。';
@@ -7535,7 +7535,7 @@ applySave=function(d){
  return r;
 };
 var _packV4185=packSave;
-packSave=function(){ var o=_packV4185.apply(null,arguments); o.v='4.18.5'; return o; };
+packSave=function(){ var o=_packV4185.apply(null,arguments); o.v='4.18.6'; return o; };
 
 /* ---------- 13. 渲染接线 ---------- */
 var _renderV4185=render;
@@ -7552,7 +7552,7 @@ render=function(){
   var hc=document.getElementById('hudCash'); if(hc){ var t=M(s.cash||0)+((s.econ&&s.econ.debt>0)?' · 欠 '+M(s.econ.debt):''); if(hc.textContent!==t) hc.textContent=t; }
   var tc=document.getElementById('tCash'); if(tc){ tc.textContent='现银 '+M(s.cash||0); tc.className=(s.econ&&s.econ.debt>0)?'tag warn':'tag'; }
   var tf=document.getElementById('tFund'); if(tf) tf.textContent='公费 '+M(s.fund||0);
-  var ta=document.getElementById('tAp'); if(ta) ta.textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'按天计时';
+  var ta=document.getElementById('tAp'); if(ta) ta.textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'';
  }catch(e){}
  try{ calDecorate(); calRenderJobs(); }catch(e){}
 };
@@ -7565,6 +7565,374 @@ window.__CAL.loop=calLoop; window.__CAL.busy=actBusy; window.__CAL.gate=actGate;
 window.__CAL.mark=spMark;
 window.__CAL.flushSpend=function(){ if(SP.req&&!SP.cur) spBegin(); else if(SP.cur) spRun(); return !SP.cur; };
 window.__CAL.spending=function(){ return SP.cur?{label:SP.cur.label,from:SP.cur.from,to:SP.cur.to,n:SP.cur.n}:null; };
+
+/* ================= V4.18.6：取消实时时钟，时间只随行动与「静待时日」推进 =================
+   - 不再有暂停/正常/快速/极速与空格键；CLOCK.speed 恒为 0，calLoop 只负责弹出到期事件、续跑行动、刷新界面。
+   - 「静待时日」：7 天 / 30 天 / 到下个月初 / 到下一个历史事件，逐日走同一条每日/每月/年末管线（与行动相同的推进器）。
+     途中遇到历史抉择或重大事件（内乱、开战等）即提前停下；年度报告照常弹出，看完后接着等。
+   - 旧档里的速度偏好（s.cal.speedPref）一律忽略。 */
+calSetSpeed=function(){ CLOCK.speed=0; CLOCK.acc=0; if(s&&s.cal) delete s.cal.speedPref; try{ calClockUI(true); }catch(e){} };
+document.__calKey=1;   /* 不再绑定空格键 */
+var _calPauseV4186=calPause;
+calPause=function(reason){
+ CLOCK.speed=0; CLOCK.acc=0;
+ if(SP.cur&&SP.cur.key==='wait'&&s&&SP.cur.to>s.cal.ord){ SP.cur.to=s.cal.ord; SP.cur.label='静待时日（因'+String(reason||'要事').slice(0,30)+'提前停下）'; }
+};
+var _showEventV4186=showEvent;
+showEvent=function(ev){
+ if(SP.cur&&SP.cur.key==='wait'&&s&&SP.cur.to>s.cal.ord){ SP.cur.to=s.cal.ord; SP.cur.label='静待时日（'+(ev&&ev.t?ev.t:'历史抉择')+'）'; }
+ return _showEventV4186.apply(this,arguments);
+};
+function waitNextEventOrd(){
+ if(!s||!s.cal) return null;
+ var today=s.cal.ord, best=null;
+ for(var i=0;i<EVENTS.length;i++){
+  var ev=EVENTS[i]; if(s.evDone[ev.id]) continue;
+  var d=evDateOf(ev), o=calOrd(ev.y,d[0],d[1]);
+  if(o>today&&o<=CAL_END_ORD&&(!best||o<best.o)) best={o:o,t:ev.t};
+ }
+ return best;
+}
+function waitOptions(){
+ if(!s||!s.cal) return [];
+ var t=calFromOrd(s.cal.ord), nm=t.m===12?calOrd(t.y+1,1,1):calOrd(t.y,t.m+1,1), ne=waitNextEventOrd(), left=CAL_END_ORD-s.cal.ord;
+ var o=[
+  {k:'d7',label:'静待 7 天',n:7},
+  {k:'d30',label:'静待 30 天',n:30},
+  {k:'month',label:'到下个月初',n:nm-s.cal.ord,sub:calFmtOrd(nm)},
+  {k:'event',label:'到下一个历史事件',n:ne?ne.o-s.cal.ord:0,sub:ne?(calFmtOrd(ne.o)+' · '+ne.t):'此后没有已知的历史事件'}
+ ];
+ o.forEach(function(x){ x.n=Math.max(0,Math.min(x.n,left)); if(!x.sub) x.sub=x.n?('到 '+calFmtOrd(s.cal.ord+x.n)):''; });
+ return o;
+}
+function waitWhy(){
+ if(!s) return '尚未开局';
+ if(s.dead) return '人已不在';
+ if(s.cal&&s.cal.finished) return '历史已到 1972 年末';
+ if(SP.cur) return '正在办理「'+SP.cur.label+'」';
+ if(calBlocked()) return '有事待处理';
+ return '';
+}
+function waitStart(k){
+ try{ if(!$('mask').classList.contains('hidden')&&/^静待时日/.test($('dlgTag').textContent||'')) $('mask').classList.add('hidden'); }catch(e){}
+ var why=waitWhy(); if(why){ calToast(why+'，不能静待。'); return false; }
+ var op=waitOptions().filter(function(x){ return x.k===k; })[0];
+ if(!op||op.n<=0){ calToast('没有可等的日子。'); return false; }
+ SP.req={n:op.n,key:'wait',label:op.k==='event'?'静待时日（到下一个历史事件）':op.label};
+ SP.pre=SP.lastPre||spSnap();
+ $('mask').classList.add('hidden');
+ return spBegin();
+}
+function waitMenu(){
+ var why=waitWhy(); if(why){ calToast(why+'，不能静待。'); return; }
+ $('dlgTag').textContent='静待时日 · '+calFmtOrd(s.cal.ord);
+ $('dlgTitle').textContent='静待时日';
+ $('dlgDesc').textContent='什么也不做，让日子过去。每月生计照常结算；遇到历史抉择或重大变故会提前停下。';
+ var body=$('dlgBody'); body.innerHTML='';
+ waitOptions().forEach(function(op){
+  var b=document.createElement('button'); b.className='choice'; b.setAttribute('data-wait',op.k);
+  b.innerHTML='<b>'+op.label+(op.n?'<span class="cdnote dur">'+op.n+' 天</span>':'')+'</b><div class="sub">'+op.sub+'</div>';
+  if(!op.n) b.disabled=true;
+  b.onclick=function(){ waitStart(op.k); };
+  body.appendChild(b);
+ });
+ var c=document.createElement('button'); c.className='choice'; c.style.textAlign='center'; c.innerHTML='<b>不等了</b>';
+ c.onclick=function(){ $('mask').classList.add('hidden'); SP.lastPre=null; };
+ body.appendChild(c);
+ $('mask').classList.remove('hidden');
+}
+var _calClockUIV4186=calClockUI;
+calClockUI=function(force){
+ _calClockUIV4186.apply(this,arguments);
+ if(!s||!s.cal) return;
+ var sp=document.getElementById('hudSpeed');
+ if(sp){
+  var b=calBlocked();
+  var txt=s.cal.finished?'已结束':(s.dead?'已终':(SP.cur?('办理中 · 至 '+calShort(SP.cur.to)):(b?'等待处理':'')));
+  if(sp.textContent!==txt) sp.textContent=txt;
+  var cl='hud-spd'+(txt?' on':'');
+  if(sp.className!==cl) sp.className=cl;
+ }
+ var wb=document.getElementById('btnWait');
+ if(wb){ var dis=!!waitWhy(); if(wb.disabled!==dis) wb.disabled=dis; }
+};
+(function(){
+ function bind(){
+  var wb=document.getElementById('btnWait');
+  if(wb&&!wb.getAttribute('data-bound')){ wb.setAttribute('data-bound','1'); wb.addEventListener('click',function(){ waitMenu(); }); }
+ }
+ setTimeout(bind,0); document.addEventListener('DOMContentLoaded',bind);
+})();
+var _initV4186=init;
+init=function(){ var r=_initV4186.apply(this,arguments); CLOCK.speed=0; if(s&&s.cal) delete s.cal.speedPref; try{ window.scrollTo(0,0); }catch(e){} return r; };   /* 开局后回到页首：手机上开局按钮在表单底部 */
+var _applySaveV4186=applySave;
+applySave=function(){ var r=_applySaveV4186.apply(this,arguments); CLOCK.speed=0; CLOCK.acc=0; if(s&&s.cal) delete s.cal.speedPref; return r; };   /* 旧档的速度偏好一律忽略 */
+CLOCK.speed=0;
+window.__CAL.setSpeed=calSetSpeed;
+window.__CAL.wait=waitStart; window.__CAL.waitOptions=waitOptions; window.__CAL.waitMenu=waitMenu; window.__CAL.nextEventOrd=waitNextEventOrd;
+
+/* ================= V4.18.6 第二步：事件照片、年代背景、动效 =================
+   - PHOTOS：照片说明（中文描述、年份、作者、许可、Commons 来源），由 tests/photo_data.py 生成；文件在 img/。
+     事件 id 对应 <id>、<id>_2、<id>_3；era_* 为年代背景。
+   - 历史事件弹窗顶部显示照片：铺满宽度、16:9、可左右切换（按钮 / 滑动 / 方向键），下方小字署名与来源；
+     只加载当前与下一张；加载失败的照片直接去掉，全部失败则整块隐藏。
+   - 时代纪事里列出已发生、有照片的事件，可点开再看。
+   - 开局题头与顶栏按当前年代换背景（深色遮罩，文字对比度见 tests/test_photos.py）。
+   - 动效只用 DESIGN.md 的令牌；prefers-reduced-motion 下由样式表统一降为 0ms。 */
+var PHOTOS={"opium":{"f":"img/opium.jpg","d":"1841 年 1 月，东印度公司铁甲蒸汽船“复仇女神号”与英舰小艇在穿鼻洋击毁清军水师战船。","y":"1843 年绘","a":"爱德华·邓肯（Edward Duncan）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADestroying_Chinese_war_junks%2C_by_E._Duncan_%281843%29.jpg"},"nanjing42":{"f":"img/nanjing42.jpg","d":"1842 年 8 月，《南京条约》在英舰“皋华丽号”上签字用印。","y":"1846 年刊印","a":"约翰·普拉特绘，约翰·伯内特刻版","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThe_Signing_of_the_Treaty_of_Nanking.jpg"},"taiping":{"f":"img/taiping.jpg","d":"湘军攻复安庆。安庆之战是太平天国由盛转衰的转折。","y":"1886 年绘","a":"吴友如","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARegaining_the_Provincial_City_Anqing2.jpg"},"secondopium56":{"f":"img/secondopium56.jpg","d":"1860 年英法联军攻占大沽炮台之后。炮台内，清军守兵的遗体还横在阵地上。","y":"1860 年","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAfter_the_Capture_of_the_Taku_Forts_1860.jpg","p":"50% 55%"},"ziqiang":{"f":"img/ziqiang.jpg","d":"江南制造局搬运火炮。洋务运动时期最大的军工厂。原照为 1900 年前所摄，此为 2009 年翻拍。","y":"1900 年前","a":"原摄影者不详","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AGun_transportation_at_Jiangnan_Arsenal.jpg"},"taipingfall64":{"f":"img/taipingfall64.jpg","d":"清军攻破天京（南京）。太平天国自此覆亡。","y":"19 世纪","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThird_Battle_of_Nanking.jpg"},"saihai75":{"f":"img/saihai75.jpg","d":"清军与回军在渭河作战。西北战事是塞防之议的背景。","y":"1886—1890 年间绘","a":"庆宽","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_at_the_Wei_River_%28Weihe%29.jpg"},"jiawu":{"f":"img/jiawu.jpg","d":"北洋水师旗舰“定远”号。参加黄海海战，1895 年在威海卫被鱼雷击伤后自毁。","y":"1884—1895 年间","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADingyuan_%28ship%2C_1884%29_-_NH_1926_-_cropped.jpg"},"wuxu":{"f":"img/wuxu.jpg","d":"康有为像。戊戌变法的主要推动者，变法失败后流亡海外。","y":"年份不详","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AKang-youwei2-large.jpg","p":"50% 22%"},"boxer":{"f":"img/boxer.jpg","d":"八国联军中的英属印度第十六孟加拉骑兵在北京天坛。","y":"1900 年","a":"佚名（理查森爵士相册）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIndian_troops_at_Temple_of_Heaven_Peking_1900.jpg"},"boxer01":{"f":"img/boxer01.jpg","d":"《辛丑条约》签字现场。条约规定赔款四亿五千万两。","y":"1901 年 9 月 7 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E3%80%8A%E8%BE%9B%E4%B8%91%E6%9D%A1%E7%BA%A6%E3%80%8B%E7%AD%BE%E5%AD%97%E6%97%B6%E7%9A%84%E6%83%85%E6%99%AF.jpg"},"abolish_exam05":{"f":"img/abolish_exam05.jpg","d":"南京江南贡院的号舍。考生在这样的隔间里连考数日，1905 年科举停废后空置。今景。","y":"2001 年 4 月摄","a":"Dr. Meierhofer","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3APr%C3%BCfungszellen-Nanking.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 85%"},"xinhai":{"f":"img/xinhai.jpg","d":"武昌起义中的革命军士兵。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_soldiers_at_Wuchang.jpg"},"minguo":{"f":"img/minguo.jpg","d":"1912 年 1 月 1 日，孙中山就任临时大总统后与总统府职员合影。","y":"1912 年 1 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1912%E5%B9%B41%E6%9C%881%E6%97%A5%EF%BC%8C%E5%AD%99%E4%B8%AD%E5%B1%B1%E5%B0%B1%E8%81%8C%E4%B8%AD%E5%8D%8E%E6%B0%91%E5%9B%BD%E4%B8%B4%E6%97%B6%E5%A4%A7%E6%80%BB%E7%BB%9F%E5%90%8E%E4%B8%8E%E6%80%BB%E7%BB%9F%E5%BA%9C%E8%81%8C%E5%91%98%E5%90%88%E5%BD%B1.jpg","p":"50% 35%"},"huguo15":{"f":"img/huguo15.jpg","d":"蔡锷像。1915 年底他在云南起兵讨袁，护国战争由此开始。","y":"1916 年以前","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACai_E.jpg","p":"50% 15%"},"warlord16":{"f":"img/warlord16.jpg","d":"袁世凯戎装像。他 1916 年 6 月死后，北洋分裂为各派军阀。","y":"约 1912 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AYuan_Shikai_in_uniform.jpg","p":"50% 20%"},"may4":{"f":"img/may4.jpg","d":"1919 年 5 月 4 日，北京十三所学校约三千名学生在天安门前集会，反对巴黎和会的山东决议。","y":"1919 年 5 月 4 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_protestors_march_against_the_Treaty_of_Versailles_%28May_4%2C_1919%29.jpg"},"beifa":{"f":"img/beifa.jpg","d":"北伐战争图片拼合：蒋介石检阅国民革命军、北上行军的部队、炮兵作战等。原照摄于 1926—1928 年，2012 年拼合。","y":"1926—1928 年","a":"Futuretrillionaire（拼合）","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3ANorthern_Expedition_collage.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 35%"},"split":{"f":"img/split.jpg","d":"“清党”中被捕押走的共产党人。","y":"1927 年 4 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACommunist_purge.jpg"},"northeast28":{"f":"img/northeast28.jpg","d":"张学良。这一年年底，他宣布东北易帜，服从南京国民政府。","y":"1928 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_1928.jpg","p":"50% 8%"},"918":{"f":"img/918.jpg","d":"日军骑兵开进沈阳。","y":"1931 年 9 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMukden_1931_japan_shenyang.jpg"},"changzheng":{"f":"img/changzheng.jpg","d":"红军干部向长征后的队伍讲话。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALong-march.jpg"},"zunyi35":{"f":"img/zunyi35.jpg","d":"遵义会议会址。1935 年 1 月，中共中央政治局在此开会，调整了军事领导。今景。","y":"2005 年 8 月 8 日摄","a":"小小新手","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3AZunyiMeeting.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩"},"xian":{"f":"img/xian.jpg","d":"事变前两个月的合影：张学良（左）、杨虎城（中）、蒋介石（右）。","y":"1936 年 10 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_Yang_Hucheng_and_Chiang_Kai-shek.jpg","p":"50% 35%"},"q7":{"f":"img/q7.jpg","d":"第二十九军在前线作战。","y":"1937 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AArmy_29_Fighting_1937.jpg"},"wuhan":{"f":"img/wuhan.jpg","d":"武汉外围的中国军队机枪阵地。","y":"1938 年","a":"唐古樵","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_1938.jpg"},"changsha39":{"f":"img/changsha39.jpg","d":"第一次长沙会战中的日军士兵。","y":"1939 年 9 月","a":"日本陆军","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIJA%2C_Battle_of_Changsha%2C_China%2C_September_1939.jpg","p":"50% 40%"},"baituan":{"f":"img/baituan.jpg","d":"八路军攻占娘子关。","y":"1940 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHundred_Regiments_Offensive_1940.jpg"},"newfourth41":{"f":"img/newfourth41.jpg","d":"新四军政治部职员，手执纸烟者为部长林植夫。","y":"1938 年刊","a":"《大美画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E6%96%B0%E5%9B%9B%E5%86%9B%E6%94%BF%E6%B2%BB%E9%83%A8%E8%81%8C%E5%91%98.png","p":"50% 35%"},"henan42":{"f":"img/henan42.jpg","d":"河南大饥荒。饿极的灾民啃食树皮。","y":"1943 年","a":"哈里森·福尔曼（Harrison Forman）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAgsphoto_11239_full.jpg","p":"50% 30%"},"ichigo44":{"f":"img/ichigo44.jpg","d":"日军在粤汉铁路沿线冲锋。豫湘桂战役中国军队大溃退。","y":"1944 年 7 月","a":"《读卖新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AJapanese_troops_performing_a_close_combat_attack_on_Y%C3%BCeh-Han_Railroad.jpg"},"1945":{"f":"img/1945.jpg","d":"南京受降：中国战区受降主官何应钦在日军投降书上签字。","y":"1945 年 9 月 9 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHe_Yinqin_signs_1945.jpg"},"civilwar46":{"f":"img/civilwar46.jpg","d":"四平战役中的共产党军队阵地。","y":"1946 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_of_Siping03.jpg"},"constitution47":{"f":"img/constitution47.jpg","d":"1946 年 12 月 25 日国民大会通过的《中华民国宪法》，1947 年 1 月 1 日公布。","y":"1946 年","a":"国史馆","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1946_National_Assembly_Constitution.jpg","p":"50% 12%"},"campaign48":{"f":"img/campaign48.jpg","d":"淮海战役中，解放军华东坦克大队配合步兵进攻。","y":"1948 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLAHuaihai.jpg"},"founding49":{"f":"img/founding49.jpg","d":"开国大典，毛泽东在天安门城楼宣告中华人民共和国中央人民政府成立。","y":"1949 年 10 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMao_Proclaiming_New_China.JPG","p":"50% 35%"},"korean50":{"f":"img/korean50.jpg","d":"长津湖战役中，美军陆战一师的车队穿过志愿军防线突围。","y":"1950 年 12 月","a":"彼得·麦克唐纳（美国海军陆战队）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChosin.jpg"},"plan53":{"f":"img/plan53.jpg","d":"长春第一汽车制造厂职工欢庆第一批解放牌汽车出厂。","y":"1956 年","a":"袁苓","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_people%27s_pride.jpg","p":"50% 40%"},"greatleap58":{"f":"img/greatleap58.jpg","d":"大炼钢铁的土高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace2.jpg","p":"50% 40%"},"cultural66":{"f":"img/cultural66.jpg","d":"天安门广场上等待接见的红卫兵。","y":"1966 年 9 月 15 日","a":"孟昭瑞","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARed_Guards_in_Tian%27anmen_Square.jpg","p":"50% 55%"},"era_qing":{"f":"img/era_qing.jpg","d":"广州，英国领事馆的本地卫队，远处是六榕寺花塔。","y":"1871 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATARTAR_SOLDIERS.jpg","c":"广州的领事馆卫队"},"era_qing_city":{"f":"img/era_qing_city.jpg","d":"广州西关浆栏街，沿街多是药材铺。","y":"约 1873 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APHYSIC_STREET%2C_CANTON.jpg","c":"广州浆栏街"},"era_republic":{"f":"img/era_republic.jpg","d":"上海南京路。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AShanghai_Nanking_Road_1930s.jpeg","c":"上海南京路"},"era_war":{"f":"img/era_war.jpg","d":"台儿庄战役中的巷战。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuang.jpg","c":"台儿庄巷战"},"era_newchina":{"f":"img/era_newchina.jpg","d":"中苏专家在建设中的武汉长江大桥上。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg","c":"建设中的武汉长江大桥"},"ziqiang_2":{"f":"img/ziqiang_2.jpg","d":"福州船政局全景，左宗棠、沈葆桢创办的近代造船厂。","y":"1898 年前","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AFOOCHOW_ARSENAL.jpg"},"ziqiang_3":{"f":"img/ziqiang_3.jpg","d":"李鸿章，洋务运动的主要主持者。此照摄于他去世的那一年。","y":"1901 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALi_Hongzhang_1901.jpg","p":"50% 12%"},"taiping_2":{"f":"img/taiping_2.jpg","d":"曾国藩像。他组建湘军，主持对太平天国的战事。","y":"1871 年 3 月","a":"吴嘉善","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZeng_Guofan_Photograph.jpg","p":"50% 30%"},"jiawu_2":{"f":"img/jiawu_2.jpg","d":"瑞典讽刺漫画：赴日议和的李鸿章。","y":"1895 年 3 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APolitical_cartoon_of_Li_Hongzhang_1895.png","p":"50% 50%"},"xinhai_2":{"f":"img/xinhai_2.jpg","d":"汉阳的革命军总司令部（一说在古琴台）。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_army_headquarters_at_Hanyang.jpg","p":"50% 40%"},"warlord16_2":{"f":"img/warlord16_2.jpg","d":"北洋陆军操练。","y":"1910 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMilitary_training_of_the_Beiyang_Army.jpg"},"q7_3":{"f":"img/q7_3.jpg","d":"南京，魏特琳（Minnie Vautrin）和她在金陵女子文理学院收容的难民。","y":"1937 年","a":"侵华日军南京大屠杀遇难同胞纪念馆藏","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMinnie_Vautrin_helped_the_refugees_in_1937.jpg","p":"50% 45%"},"wuhan_2":{"f":"img/wuhan_2.jpg","d":"1938 年 6 月黄河花园口决堤，以水阻敌，豫皖苏大片村庄被淹。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1938_Yellow_River_flood.jpg"},"wuhan_3":{"f":"img/wuhan_3.jpg","d":"台儿庄附近，中国士兵伏在被毁的日军卡车旁，前景是一匹死马。","y":"1938 年 4 月","a":"罗伯特·卡帕（Robert Capa）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuangBattlephoto.jpg"},"henan42_2":{"f":"img/henan42_2.jpg","d":"1938 年黄河决堤后的难民群。原为日方宣传照片，原题称难民“为日军所救”。","y":"1938 年","a":"佚名（日方宣传照）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARefugees_of_Yellow_River_Flood.JPG"},"campaign48_2":{"f":"img/campaign48_2.jpg","d":"解放军进入上海南京路。","y":"1949 年 5 月 25 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLA_Troops_entered_to_Nanjing_Road%2C_Shanghai.jpg"},"plan53_2":{"f":"img/plan53_2.jpg","d":"中苏专家在建设中的武汉长江大桥上。大桥是“一五”计划的重点工程。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg"},"transformation56":{"f":"img/transformation56.jpg","d":"建设中的武汉长江大桥。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_Yangtze_River_Bridge_in_construction.jpg"},"leap58":{"f":"img/leap58.jpg","d":"土法炼钢的小高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace4.jpg","p":"50% 55%"},"boxer_2":{"f":"img/boxer_2.jpg","d":"天津美国领事馆前的美国海军陆战队，随后随西摩尔联军北上。","y":"1900 年","a":"肯扬·考克斯（Kenyon Cox）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AUS_Marines_at_American_Consulate%2C_Tianjin%2C_1900_%28CHANDLESS_0%29.jpeg"},"un71":{"f":"img/un71.jpg","d":"尼克松抵达北京，与周恩来握手。中国恢复联合国席位后不到四个月。","y":"1972 年 2 月 21 日","a":"白宫摄影办公室","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:President_Richard_Nixon_and_Premier_Chou_En-Lai_Shake_Hands_at_the_Nixons%27_Arrival_in_Peking,_China_-_DPLA_-_315dbcc0e8b46e1bc678fde12bef9eb8.jpg"},"secondopium56_2":{"f":"img/secondopium56_2.jpg","d":"大沽北炮台一角，攻破后即刻拍摄。阵亡的守兵倒在炮位与壕沟里。","y":"1860 年 8 月 21 日","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Felice_Beato_-_Interior_of_the_Angle_of_Taku_North_Fort_Immediately_After_Its_Capture_by_Storm_-_Google_Art_Project.jpg","p":"50% 60%"},"era_war_2":{"f":"img/era_war_2.jpg","d":"日军轰炸机轰炸重庆。","y":"1940 年 6 月 16 日","a":"《朝日新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E8%BD%9F%E7%82%B8%E9%87%8D%E6%85%B6_%28cropped%29.jpg","c":"日机轰炸重庆"}};
+/* 同一年的事件在 V4.10 段被合并（大跃进与人民公社化 → 大跃进），照片跟着并过去 */
+var PH_ALIAS={greatleap58:['leap58']};
+var PH={title:null,list:[],i:0,bad:{},els:null,era:'',lastDate:'',obs:null,galSig:'',galAll:false};
+function phList(id){
+ var a=[]; if(!id) return a; id=String(id);
+ if(/^era_/.test(id)) return a;
+ [id].concat(PH_ALIAS[id]||[]).forEach(function(b){
+  [b,b+'_2',b+'_3'].forEach(function(k){ if(PHOTOS[k]&&!PH.bad[PHOTOS[k].f]) a.push(PHOTOS[k]); });
+ });
+ return a;
+}
+function phEsc(t){ return String(t==null?'':t).replace(/[&<>"]/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]; }); }
+function phReduced(){ try{ return !!(window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches); }catch(e){ return false; } }
+function phCapHTML(p){
+ var lic=p.u?'<a href="'+phEsc(p.u)+'" target="_blank" rel="noopener license">'+phEsc(p.l)+'</a>':phEsc(p.l);
+ var seg=[phEsc(p.y),phEsc(p.a),lic+(p.m?'，'+phEsc(p.m):'')];
+ return '<span class="ph-d">'+phEsc(p.d)+'</span>'+
+  '<span class="ph-m">'+seg.map(function(t,i){ return '<span class="ph-i'+(i===1?' ph-a':'')+'">'+t+'</span>'; }).join('<span class="ph-sep"> · </span>')+
+  '<span class="ph-sep"> · </span><span class="ph-i ph-src"><a href="'+phEsc(p.s)+'" target="_blank" rel="noopener">来源</a></span></span>';
+}
+function phSvg(dir){
+ return '<svg width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" focusable="false"><path d="'+(dir<0?'M11.5 3.5 6 9l5.5 5.5':'M6.5 3.5 12 9l-5.5 5.5')+'" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+}
+function phClear(){
+ var f=document.getElementById('dlgMedia');
+ PH.title=null; PH.list=[]; PH.i=0; PH.els=null;
+ if(f){ f.hidden=true; f.innerHTML=''; f.removeAttribute('data-n'); }
+}
+function phMount(list,title){
+ var f=document.getElementById('dlgMedia'); if(!f) return false;
+ list=(list||[]).filter(function(p){ return !PH.bad[p.f]; });
+ if(!list.length){ phClear(); return false; }
+ var keep=(PH.title===title&&PH.list.length)?Math.min(PH.i,list.length-1):0;
+ PH.title=title; PH.list=list; PH.i=0;
+ f.innerHTML=''; f.hidden=false; f.setAttribute('data-n',String(list.length));
+ var frame=document.createElement('div'); frame.className='ph-frame';
+ var track=document.createElement('div'); track.className='ph-track';
+ var imgs=[];
+ list.forEach(function(p,i){
+  var sl=document.createElement('div'); sl.className='ph-slide';
+  var im=document.createElement('img'); im.alt=p.d; im.setAttribute('loading','lazy'); im.setAttribute('decoding','async');
+  im.setAttribute('data-src',p.f); if(p.p) im.style.objectPosition=p.p;
+  im.onload=function(){ im.classList.add('on'); };
+  im.onerror=function(){ PH.bad[p.f]=1; if(PH.title===title) phMount(PH.list,title); };
+  sl.appendChild(im); track.appendChild(sl); imgs.push(im);
+ });
+ frame.appendChild(track);
+ var prev=null,next=null,count=null;
+ if(list.length>1){
+  prev=document.createElement('button'); prev.type='button'; prev.className='ph-nav prev'; prev.setAttribute('aria-label','上一张'); prev.innerHTML=phSvg(-1);
+  next=document.createElement('button'); next.type='button'; next.className='ph-nav next'; next.setAttribute('aria-label','下一张'); next.innerHTML=phSvg(1);
+  count=document.createElement('span'); count.className='ph-count';
+  prev.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); phGo(PH.i-1); };
+  next.onclick=function(e){ if(e&&e.stopPropagation) e.stopPropagation(); phGo(PH.i+1); };
+  frame.appendChild(prev); frame.appendChild(next); frame.appendChild(count);
+  phSwipe(frame,track);
+ }
+ var cap=document.createElement('figcaption'); cap.className='ph-cap';
+ f.appendChild(frame); f.appendChild(cap);
+ PH.els={frame:frame,track:track,imgs:imgs,prev:prev,next:next,count:count,cap:cap};
+ try{ if(PH.obs) PH.obs.takeRecords(); }catch(e){}
+ phGo(keep,true);
+ return true;
+}
+function phLoad(i){
+ var E=PH.els; if(!E||!E.imgs[i]) return;
+ var im=E.imgs[i], src=im.getAttribute('data-src');
+ if(src&&!im.getAttribute('src')){ im.setAttribute('src',src); if(im.complete&&im.naturalWidth) im.classList.add('on'); }
+}
+function phGo(i,instant){
+ var E=PH.els, n=PH.list.length; if(!E||!n) return;
+ i=Math.max(0,Math.min(n-1,i)); PH.i=i;
+ if(instant){ E.track.style.transition='none'; }
+ E.track.style.transform='translateX('+(-100*i)+'%)';
+ if(instant){ try{ void E.track.offsetWidth; }catch(e){} E.track.style.transition=''; }
+ phLoad(i); phLoad(i+1);
+ E.cap.innerHTML=phCapHTML(PH.list[i]);
+ if(E.count) E.count.textContent=(i+1)+' / '+n;
+ if(E.prev) E.prev.disabled=(i===0);
+ if(E.next) E.next.disabled=(i===n-1);
+}
+function phSwipe(frame,track){
+ var x0=null,y0=0,dx=0,id=null,w=1,horiz=false;
+ function down(e){ if(e.button>0) return; if(e.target&&e.target.closest&&e.target.closest('.ph-nav')) return;
+  x0=e.clientX; y0=e.clientY; dx=0; id=e.pointerId; horiz=false; w=frame.getBoundingClientRect().width||1; }
+ function move(e){ if(x0===null||e.pointerId!==id) return; dx=e.clientX-x0; var dy=e.clientY-y0;
+  if(!horiz&&Math.abs(dx)>8&&Math.abs(dx)>Math.abs(dy)){ horiz=true; try{ frame.setPointerCapture(id); }catch(er){} }
+  if(horiz){ var n=PH.list.length, edge=(PH.i===0&&dx>0)||(PH.i===n-1&&dx<0);
+   track.style.transition='none'; track.style.transform='translateX(calc('+(-100*PH.i)+'% + '+Math.round(edge?dx/3:dx)+'px))'; } }
+ function up(e){ if(x0===null||e.pointerId!==id) return; track.style.transition='';
+  var t=Math.max(40,w*0.18); if(horiz&&dx<=-t) phGo(PH.i+1); else if(horiz&&dx>=t) phGo(PH.i-1); else phGo(PH.i);
+  x0=null; horiz=false; }
+ frame.addEventListener('pointerdown',down); frame.addEventListener('pointermove',move);
+ frame.addEventListener('pointerup',up); frame.addEventListener('pointercancel',up);
+}
+/* 弹窗：标题换了（别的弹窗复用了同一个框）或关闭，就把照片撤掉；关闭时留一个淡出的影子 */
+function phGhost(mask){
+ if(phReduced()||!mask||!mask.cloneNode||!document.body) return;
+ var dlg=mask.querySelector&&mask.querySelector('.dialog'); var st=dlg?dlg.scrollTop:0;
+ var g=mask.cloneNode(true); g.removeAttribute('id'); g.classList.remove('hidden'); g.classList.add('mask-ghost'); g.setAttribute('aria-hidden','true');
+ var all=g.querySelectorAll('[id]'); for(var i=0;i<all.length;i++) all[i].removeAttribute('id');
+ document.body.appendChild(g);
+ var gd=g.querySelector('.dialog'); if(gd) gd.scrollTop=st;
+ setTimeout(function(){ if(g.parentNode) g.parentNode.removeChild(g); },260);
+}
+function phObserve(){
+ if(PH.obs||typeof MutationObserver==='undefined') return;
+ var mask=document.getElementById('mask'), tt=document.getElementById('dlgTitle'); if(!mask||!tt) return;
+ PH.obs=new MutationObserver(function(recs){
+  var closed=false;
+  recs.forEach(function(r){ if(r.type==='attributes'&&r.target===mask&&String(r.oldValue||'').indexOf('hidden')<0) closed=true; });
+  var hiddenNow=mask.classList.contains('hidden');
+  if(closed&&hiddenNow){
+   try{ phGhost(mask); }catch(e){}
+   phClear(); return;
+  }
+  if(PH.title!==null&&(tt.textContent!==PH.title||closed)) phClear();
+ });
+ PH.obs.observe(mask,{attributes:true,attributeFilter:['class'],attributeOldValue:true});
+ PH.obs.observe(tt,{childList:true,characterData:true,subtree:true});
+}
+function phForEvent(ev){
+ if(!ev||!ev.id) return false;
+ var mask=document.getElementById('mask'); if(!mask||mask.classList.contains('hidden')) return false;
+ var tt=document.getElementById('dlgTitle'); if(tt&&tt.textContent!==ev.t) return false;
+ return phMount(phList(ev.id),ev.t);
+}
+var _showEventPh=showEvent;
+showEvent=function(ev){
+ var r=_showEventPh.apply(this,arguments);
+ try{ phObserve(); phForEvent(ev); }catch(e){}
+ return r;
+};
+/* 时代纪事：已发生、有照片的事件，点开再看 */
+function phFirstEvent(id){ for(var i=0;i<EVENTS.length;i++){ if(EVENTS[i].id===id) return EVENTS[i]; } return null; }
+function phView(id){
+ var ev=phFirstEvent(id); if(!ev) return false;
+ if(!$('mask').classList.contains('hidden')) return false;
+ var rec=null; (s&&s.histRec||[]).forEach(function(r){ if(r.id===id) rec=r; });
+ $('dlgTag').textContent='历史影像 · '+(rec?calFmtOrd(rec.ord):(ev.y+'年'));
+ $('dlgTitle').textContent=ev.t; $('dlgDesc').textContent=ev.d;
+ var body=$('dlgBody'); body.innerHTML='';
+ if(rec){ var p=document.createElement('p'); p.className='small'; p.textContent='你当时的选择：'+rec.c; body.appendChild(p); }
+ var c=document.createElement('button'); c.className='choice'; c.style.textAlign='center'; c.innerHTML='<b>关闭</b>';
+ c.onclick=function(){ $('mask').classList.add('hidden'); };
+ body.appendChild(c);
+ $('mask').classList.remove('hidden');
+ phObserve(); phMount(phList(id),ev.t);
+ return true;
+}
+function phGalleryRender(){
+ var box=document.getElementById('evGallery'); if(!box) return;
+ if(!s||!s.evDone){ if(PH.galSig!==''){ box.innerHTML=''; PH.galSig=''; } return; }
+ var seen={}, items=[];
+ EVENTS.forEach(function(ev){
+  if(seen[ev.id]||!s.evDone[ev.id]) return; seen[ev.id]=1;
+  var n=phList(ev.id).length; if(!n) return;
+  var d=evDateOf(ev); items.push({ev:ev,o:calOrd(ev.y,d[0],d[1]),n:n});
+ });
+ items.sort(function(a,b){ return b.o-a.o; });
+ var sig=items.map(function(x){ return x.ev.id+':'+x.n; }).join(',')+'|'+PH.galAll;
+ if(sig===PH.galSig) return; PH.galSig=sig;
+ if(!items.length){ box.innerHTML=''; return; }
+ var LIM=6, show=PH.galAll?items:items.slice(0,LIM);
+ var h='<h3>亲历的历史 · 影像</h3>';
+ show.forEach(function(x){ h+='<button type="button" class="evg-row" data-ev="'+phEsc(x.ev.id)+'"><span class="evg-y">'+x.ev.y+'</span><span class="evg-t">'+phEsc(x.ev.t)+'</span><span class="evg-n">'+x.n+' 张</span></button>'; });
+ if(items.length>LIM) h+='<button type="button" class="btn sm evg-more">'+(PH.galAll?'只看最近 '+LIM+' 件':'全部 '+items.length+' 件')+'</button>';
+ box.innerHTML=h;
+ if(box.querySelectorAll){
+  var rows=box.querySelectorAll('.evg-row');
+  for(var i=0;i<rows.length;i++) rows[i].onclick=function(){ phView(this.getAttribute('data-ev')); };
+  var more=box.querySelector('.evg-more'); if(more) more.onclick=function(){ PH.galAll=!PH.galAll; phGalleryRender(); };
+ }
+}
+/* 年代背景 */
+function phEraOf(y,m,d){
+ var k=y*10000+(m||1)*100+(d||1);
+ if(k<18950101) return 'era_qing';
+ if(k<19120101) return 'era_qing_city';
+ if(k<19370707) return 'era_republic';
+ if(k<19400101) return 'era_war';
+ if(k<19450815) return 'era_war_2';
+ if(k<19491001) return 'era_republic';
+ return 'era_newchina';
+}
+function phEraApply(key){
+ var p=PHOTOS[key]; if(!p||PH.era===key) return;
+ PH.era=key;
+ try{ document.documentElement.style.setProperty('--era-img','url("'+p.f+'")'); document.documentElement.setAttribute('data-era',key); }catch(e){}
+ var t='题图：'+phEsc(p.c||p.d)+'<span class="ph-sep"> · </span>'+phEsc(p.y)+'<span class="ph-sep"> · </span>'+phEsc(String(p.a).replace(/（[^）]*）/g,''))+
+  '<span class="ph-sep"> · </span>'+phEsc(p.l)+'<span class="ph-sep"> · </span><a class="ph-src" href="'+phEsc(p.s)+'" target="_blank" rel="noopener">来源</a>';
+ ['eraCredit','eraCreditGame'].forEach(function(id){ var el=document.getElementById(id); if(el) el.innerHTML=t; });
+}
+function phEraSync(){
+ if(s&&s.cal&&typeof s.cal.ord==='number'){ var t=calFromOrd(s.cal.ord); phEraApply(phEraOf(t.y,t.m,t.d)); return; }
+ var f=document.getElementById('fStart'); var y=f?parseInt(f.value,10):1840; if(!(y>0)) y=1840;
+ phEraApply(phEraOf(y,1,1));
+}
+/* 日期变化：主时刻的翻动 */
+function phDateTick(){
+ var el=document.getElementById('hudYear'); if(!el) return;
+ var t=el.textContent||'';
+ if(PH.lastDate&&t&&t!==PH.lastDate&&!phReduced()){
+  el.classList.remove('flip'); try{ void el.offsetWidth; }catch(e){} el.classList.add('flip');
+ }
+ PH.lastDate=t;
+}
+/* 制度按钮：从浮动改为放进「制度运转」卡片 */
+function phConstitutionInFlow(){
+ var b=document.getElementById('btnConstitution'), card=document.getElementById('cardInstitutionOps');
+ if(!b||!card) return;
+ if(b.parentNode!==card){ card.appendChild(b); }
+ if(b.style&&b.style.position) b.style.cssText='';
+}
+var _calClockUIPh=calClockUI;
+calClockUI=function(){
+ var r=_calClockUIPh.apply(this,arguments);
+ try{ phDateTick(); phEraSync(); }catch(e){}
+ return r;
+};
+var _renderPh=render;
+render=function(){
+ var r=_renderPh.apply(this,arguments);
+ try{ phGalleryRender(); phEraSync(); phConstitutionInFlow(); }catch(e){}
+ return r;
+};
+(function(){
+ function bind(){
+  try{ phObserve(); phEraSync(); }catch(e){}
+  var fs=document.getElementById('fStart');
+  if(fs&&!fs.getAttribute('data-era')){ fs.setAttribute('data-era','1'); fs.addEventListener('change',function(){ if(!s||!s.cal) phEraSync(); }); }
+  var tabs=document.getElementById('tabs');
+  if(tabs&&!tabs.getAttribute('data-fade')){
+   tabs.setAttribute('data-fade','1');
+   tabs.addEventListener('click',function(e){
+    var b=e.target&&e.target.closest?e.target.closest('button[data-tab]'):null; if(!b||phReduced()) return;
+    var g=document.getElementById('game'); if(!g) return;
+    g.classList.remove('tab-in'); try{ void g.offsetWidth; }catch(er){} g.classList.add('tab-in');
+    setTimeout(function(){ g.classList.remove('tab-in'); },260);
+   });
+  }
+  if(!document.__phKey){
+   document.__phKey=1;
+   document.addEventListener('keydown',function(e){
+    var f=document.getElementById('dlgMedia'), m=document.getElementById('mask');
+    if(!f||f.hidden||!m||m.classList.contains('hidden')||PH.list.length<2) return;
+    if(e.key==='ArrowLeft'){ phGo(PH.i-1); } else if(e.key==='ArrowRight'){ phGo(PH.i+1); }
+   });
+  }
+ }
+ setTimeout(bind,0); document.addEventListener('DOMContentLoaded',bind);
+})();
+window.__PH={events:function(){ return EVENTS.map(function(e){ return {id:e.id,y:e.y,t:e.t}; }); },photos:PHOTOS,list:phList,eraOf:phEraOf,view:phView,go:function(i){ phGo(i); },state:PH,gallery:phGalleryRender,clear:phClear};
 
 window.__V4185NET=1;
 })(); /* 主作用域结束 */
