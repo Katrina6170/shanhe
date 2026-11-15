@@ -593,6 +593,20 @@ window.__RENDER=function(){try{render();}catch(e){}};
 window.__RENDERMAP=function(){try{renderMap();}catch(e){}};
 var CTRL_NAME={qing:'清',beiyang:'北洋',kmt:'国民党',cpc:'中共',local:'地方',japan:'日本',russia:'沙俄',britain:'英国',france:'法国',usa:'美国',dutch:'荷兰',germany:'德国',siam:'暹罗',nepal:'尼泊尔',afghan:'阿富汗',mongolia:'蒙古'};
 
+/* V4.22：地图上一块省份的控制方。民国省界时期一块省份挂在一个“逻辑省”上（f.name），
+   热河随东北、察哈尔随河北落入日本之手（只在游戏里这两处确实归日本时才跟随）。 */
+function rawCtrl(n){
+ return (world&&world.owner&&world.owner[n])||(world&&world.regions&&world.regions[n]&&world.regions[n].ctrl)||getDefaultCtrl(n,s?s.year:1840);
+}
+function featCtrl(f){
+ var c=rawCtrl(f.name), y=s?s.year:1840, own=world&&world.owner&&world.owner[f.name];
+ /* 台湾 1895–1945 属日本、香港 1842 起属英国（游戏里没另设归属时） */
+ if(!own&&f.name==='台湾省'&&y>=1895&&y<=1944) return 'japan';
+ if(!own&&f.name==='香港特别行政区'&&y>=1842) return 'britain';
+ if(f.disp==='热河'&&y>=1933&&y<=1944&&rawCtrl('辽宁省')==='japan') return 'japan';
+ if(f.disp==='察哈尔'&&y>=1937&&y<=1944&&rawCtrl('河北省')==='japan') return 'japan';
+ return c;
+}
 /* 某省在某年的默认控制方 */
 function getDefaultCtrl(prov, year){
  var isNE=['辽宁省','吉林省','黑龙江省'].indexOf(prov)>=0;
@@ -600,9 +614,13 @@ function getDefaultCtrl(prov, year){
  var isEast=['上海市','江苏省','浙江省','安徽省'].indexOf(prov)>=0;
  var remote=['新疆维吾尔自治区','西藏自治区','内蒙古自治区','广西壮族自治区','云南省','贵州省','青海省','宁夏回族自治区','甘肃省'].indexOf(prov)>=0;
 
- if(isNE && year>=1931) return 'japan';
- if(isNorth && year>=1937) return 'japan';
- if(isEast && year>=1937) return 'japan';
+ /* V4.22：日本占领只到 1944 年（1945 年投降），之前没有终点，1945 年后开局仍把华北华东算成日本 */
+ var occ=year<=1944;
+ if(isNE && year>=1931 && occ) return 'japan';
+ if(isNorth && year>=1937 && occ) return 'japan';
+ if(isEast && year>=1937 && occ) return 'japan';
+ if(prov==='台湾省' && year>=1895 && occ) return 'japan';
+ if(prov==='香港特别行政区' && year>=1842) return 'britain';
 
  if(year<1912) return remote?'local':'qing';
  if(year<1928) return remote?'local':'beiyang';
@@ -1543,8 +1561,9 @@ function applyView(){
  var rect=svg.getBoundingClientRect();
  if(rect&&rect.width&&rect.height){
   var ar=rect.width/rect.height;
-  if(ar>boxAR){ var nh=VIEW.w/ar; vb={x:VIEW.x,y:VIEW.y+(VIEW.h-nh)/2,w:VIEW.w,h:nh}; }
-  else{ var nw=VIEW.h*ar; vb={x:VIEW.x+(VIEW.w-nw)/2,y:VIEW.y,w:nw,h:VIEW.h}; }
+  /* V4.22：改为“完整放下”而不是裁切——民国省界整体偏扁，裁切会切掉东北和新疆 */
+  if(ar>boxAR){ var nw=VIEW.h*ar; vb={x:VIEW.x+(VIEW.w-nw)/2,y:VIEW.y,w:nw,h:VIEW.h}; }
+  else{ var nh=VIEW.w/ar; vb={x:VIEW.x,y:VIEW.y+(VIEW.h-nh)/2,w:VIEW.w,h:nh}; }
  }
  svg.setAttribute('viewBox',vb.x.toFixed(1)+' '+vb.y.toFixed(1)+' '+vb.w.toFixed(1)+' '+vb.h.toFixed(1));
 }
@@ -1582,14 +1601,7 @@ function renderMap(){
  }
 
  mapFeatures.forEach(function(f){
-  var ctrl='qing';
-  if(world&&world.owner&&world.owner[f.name]){
-   ctrl=world.owner[f.name];
-  }else if(world&&world.regions&&world.regions[f.name]){
-   ctrl=world.regions[f.name].ctrl;
-  }else{
-   ctrl=getDefaultCtrl(f.name,s?s.year:1840);
-  }
+  var ctrl=featCtrl(f);
   var color=CTRL_COLOR[ctrl]||'#bdb8ab';
 
   var g=document.createElementNS('http://www.w3.org/2000/svg','g');
@@ -1604,7 +1616,7 @@ function renderMap(){
   g.appendChild(path);
 
   // 面积足够的省才显示名称
-  var short=SHORT_NAME[f.name]||f.name;
+  var short=f.disp||SHORT_NAME[f.name]||f.name;
   var label=document.createElementNS('http://www.w3.org/2000/svg','text');
   label.setAttribute('x',f.cx);
   label.setAttribute('y',f.cy);
@@ -1618,7 +1630,7 @@ function renderMap(){
 
   g.addEventListener('click',function(){
    var info=(world&&world.regions&&world.regions[f.name])||{ctrl:ctrl,str:40};
-   openRegion({n:f.name,cx:f.cx,cy:f.cy},info);
+   openRegion({n:f.disp||f.name,cx:f.cx,cy:f.cy},info);
   });
 
   layer.appendChild(g);
@@ -2749,6 +2761,43 @@ renderMap=function(){
  _lastMapSig=sig;
  _renderMapV25();
 };
+/* ---------- V4.22：民国年间按年份换成当时的真实省界 ----------
+   数据 roc.js（Virtual Shanghai，CC0）：1912–21、1922–27、1928–44、1945–46、1947–49 五套。
+   1912 年前、1949 年后仍用现有省界。台湾（1945 年前）、香港、澳门借用现有图形补上。 */
+var MODERN_FEATS=null, ROC_SETS={}, _mapEra='';
+function rocPeriod(y){
+ var g=window.ROC_GEO; if(!g||!g.periods) return null;
+ for(var i=0;i<g.periods.length;i++){ var p=g.periods[i]; if(y>=p.from&&y<=p.to) return p; }
+ return null;
+}
+function rocFeatures(p){
+ if(ROC_SETS[p.key]) return ROC_SETS[p.key];
+ var out=p.features.map(function(f){ return {name:f.name,disp:f.disp,path:f.path,cx:f.cx,cy:f.cy,pri:f.pri,alias:f.alias}; });
+ var has={}; out.forEach(function(f){ has[f.disp]=1; });
+ (MODERN_FEATS||[]).forEach(function(m){
+  if((m.name==='台湾省'&&!has['台湾'])||m.name==='香港特别行政区'||m.name==='澳门特别行政区')
+   out.push({name:m.name,path:m.path,cx:m.cx,cy:m.cy,pri:1});
+ });
+ return (ROC_SETS[p.key]=out);
+}
+var _renderMapV422=renderMap;
+renderMap=function(){
+ if(mapFeatures&&!MODERN_FEATS) MODERN_FEATS=mapFeatures;
+ if(MODERN_FEATS){
+  var p=rocPeriod(s?s.year:1840), era=p?p.key:'modern';
+  if(era!==_mapEra){ _mapEra=era; mapFeatures=p?rocFeatures(p):MODERN_FEATS; _lastMapSig=''; }
+ }
+ /* 旧存档：1945 年后还挂着“日本”的省份（来自旧的默认值，不是战争占领）改回国民党 */
+ if(s&&s.year>=1946&&world&&world.regions&&!world._v422fix){
+  Object.keys(world.regions).forEach(function(k){ var r=world.regions[k]; if(r&&r.ctrl==='japan'&&!(world.owner&&world.owner[k])) r.ctrl='kmt'; });
+  world._v422fix=1; _lastMapSig='';
+ }
+ _renderMapV422();
+ var cap=document.getElementById('mapEra');
+ if(!cap){ var w=$('chinaMap'); w=w&&w.closest('.mapwrap'); if(w){ cap=document.createElement('div'); cap.id='mapEra'; cap.className='map-era'; w.appendChild(cap); } }
+ if(cap){ var pp=rocPeriod(s?s.year:1840); var t=pp?'民国省界 · '+pp.from+'–'+pp.to:''; if(cap.textContent!==t) cap.textContent=t; cap.style.display=t?'':'none'; }
+};
+window.__ROCMAP={era:function(){ return _mapEra; },feats:function(){ return mapFeatures; }};
 document.addEventListener('DOMContentLoaded',function(){
  var rb=$('btnRandom'); if(rb) rb.onclick=randomStart;
 });
@@ -3764,7 +3813,7 @@ var TALENTS=[
  {n:'丁宝桢',s:70,bad:0,d:'办事扎实，不会讨好人。'},
  {n:'赵尔巽',s:68,bad:0,d:'老吏，慢而不错。'},
  {n:'吴大澂',s:66,bad:0,d:'学问好，打仗一般，边务上很硬。'},
- {n:'孙家鼎',s:64,bad:0,d:'谨慎能守成，不能开创。'},
+ {n:'孙家鼐',s:64,bad:0,d:'谨慎能守成，不能开创。'},
  {n:'翁同龢',s:60,bad:1,d:'讲气节，银子的事算不明白。'},
  {n:'康有为',s:62,bad:1,d:'话极大，事难落地。'},
  {n:'赵有德',s:32,bad:2,d:'捐班出身，字都写不周正，最会递帖子。'},
@@ -4088,7 +4137,7 @@ window.__declWarV4=function(p){
   });
   // 地图：时局、军政、全览
   var map=document.querySelector('.main>div:nth-child(2)');
-  if(map){var mh=!(tab==='all'||tab==='mil'||tab==='pol');if(map.classList.contains('tabhide')!==mh)map.classList.toggle('tabhide',mh);}
+  if(map){var mh=!(tab==='all'||tab==='world');if(map.classList.contains('tabhide')!==mh)map.classList.toggle('tabhide',mh);}
   var setup=document.getElementById('setupCard');
   if(setup) setup.style.display=(tab==='all'||tab==='arc')?'':'none';
  }
@@ -4153,7 +4202,7 @@ window.__declWarV4=function(p){
  function S(){ try{ return window.__S?window.__S():null; }catch(e){ return null; } }
 
  /* 第一个分页名跟着身份走 */
- function fixTab(){
+ function fixTab(){ return;
   var nav=document.querySelector('#tabs button[data-tab="gov"]'); if(!nav) return;
   var s=S(); var name='朝政';
   if(s){
@@ -4583,12 +4632,12 @@ window.v4L = window.v4L || function(t){
 
   /* 分页第一个词 */
   var gov=document.querySelector('#tabs button[data-tab="gov"]');
-  if(gov){
+  if(false&&gov){
    var gname=s.isThrone||s.isLeader?'朝政':((s.rank||0)>=3?'公务':'生计');
    if(gov.textContent!==gname) gov.textContent=gname;
   }
   var mil=document.querySelector('#tabs button[data-tab="mil"]');
-  if(mil){
+  if(false&&mil){
    var mname=(s.role==='soldier'||s.role==='officer'||t===3)?['身边','哨上','军务','军国'][t]:'军情';
    if(mil.textContent!==mname) mil.textContent=mname;
   }
@@ -6896,7 +6945,7 @@ function spPopup(c,instant){
   if(mid.length) h+='<div class="rp-sec"><b>这些天里</b><ul>'+mid.slice(-6).map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
  }
  h+='</div><button class="choice" id="rpOk" style="text-align:center"><b>知道了</b></button>';
- SP.popup={tag:(instant?'结果':'办完了')+' · '+calFmtOrd(s.cal.ord),title:c.label,html:h};
+ SP.popup={tag:(instant?'结果':'办完了')+' · '+calFmtOrd(s.cal.ord),title:c.label,html:h,key:instant?'':(c.key||'')};
  spShowPopup();
 }
 function spShowPopup(){
@@ -6906,6 +6955,7 @@ function spShowPopup(){
  $('dlgBody').innerHTML=p.html;
  $('mask').classList.remove('hidden');
  var ok=document.getElementById('rpOk'); if(ok) ok.onclick=function(){ $('mask').classList.add('hidden'); };
+ try{ if(p.key&&window.__SCENE) window.__SCENE.show(p.key,p.title); }catch(e){}
  try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
  return true;
 }
@@ -7692,7 +7742,7 @@ window.__CAL.wait=waitStart; window.__CAL.waitOptions=waitOptions; window.__CAL.
    - 时代纪事里列出已发生、有照片的事件，可点开再看。
    - 开局题头与顶栏按当前年代换背景（深色遮罩，文字对比度见 tests/test_photos.py）。
    - 动效只用 DESIGN.md 的令牌；prefers-reduced-motion 下由样式表统一降为 0ms。 */
-var PHOTOS={"opium":{"f":"img/opium.jpg","d":"1841 年 1 月，东印度公司铁甲蒸汽船“复仇女神号”与英舰小艇在穿鼻洋击毁清军水师战船。","y":"1843 年绘","a":"爱德华·邓肯（Edward Duncan）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADestroying_Chinese_war_junks%2C_by_E._Duncan_%281843%29.jpg"},"nanjing42":{"f":"img/nanjing42.jpg","d":"1842 年 8 月，《南京条约》在英舰“皋华丽号”上签字用印。","y":"1846 年刊印","a":"约翰·普拉特绘，约翰·伯内特刻版","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThe_Signing_of_the_Treaty_of_Nanking.jpg"},"taiping":{"f":"img/taiping.jpg","d":"湘军攻复安庆。安庆之战是太平天国由盛转衰的转折。","y":"1886 年绘","a":"吴友如","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARegaining_the_Provincial_City_Anqing2.jpg"},"secondopium56":{"f":"img/secondopium56.jpg","d":"1860 年英法联军攻占大沽炮台之后。炮台内，清军守兵的遗体还横在阵地上。","y":"1860 年","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAfter_the_Capture_of_the_Taku_Forts_1860.jpg","p":"50% 55%"},"ziqiang":{"f":"img/ziqiang.jpg","d":"江南制造局搬运火炮。洋务运动时期最大的军工厂。原照为 1900 年前所摄，此为 2009 年翻拍。","y":"1900 年前","a":"原摄影者不详","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AGun_transportation_at_Jiangnan_Arsenal.jpg"},"taipingfall64":{"f":"img/taipingfall64.jpg","d":"清军攻破天京（南京）。太平天国自此覆亡。","y":"19 世纪","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThird_Battle_of_Nanking.jpg"},"saihai75":{"f":"img/saihai75.jpg","d":"清军与回军在渭河作战。西北战事是塞防之议的背景。","y":"1886—1890 年间绘","a":"庆宽","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_at_the_Wei_River_%28Weihe%29.jpg"},"jiawu":{"f":"img/jiawu.jpg","d":"北洋水师旗舰“定远”号。参加黄海海战，1895 年在威海卫被鱼雷击伤后自毁。","y":"1884—1895 年间","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADingyuan_%28ship%2C_1884%29_-_NH_1926_-_cropped.jpg"},"wuxu":{"f":"img/wuxu.jpg","d":"康有为像。戊戌变法的主要推动者，变法失败后流亡海外。","y":"年份不详","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AKang-youwei2-large.jpg","p":"50% 22%"},"boxer":{"f":"img/boxer.jpg","d":"八国联军中的英属印度第十六孟加拉骑兵在北京天坛。","y":"1900 年","a":"佚名（理查森爵士相册）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIndian_troops_at_Temple_of_Heaven_Peking_1900.jpg"},"boxer01":{"f":"img/boxer01.jpg","d":"《辛丑条约》签字现场。条约规定赔款四亿五千万两。","y":"1901 年 9 月 7 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E3%80%8A%E8%BE%9B%E4%B8%91%E6%9D%A1%E7%BA%A6%E3%80%8B%E7%AD%BE%E5%AD%97%E6%97%B6%E7%9A%84%E6%83%85%E6%99%AF.jpg"},"abolish_exam05":{"f":"img/abolish_exam05.jpg","d":"南京江南贡院的号舍。考生在这样的隔间里连考数日，1905 年科举停废后空置。今景。","y":"2001 年 4 月摄","a":"Dr. Meierhofer","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3APr%C3%BCfungszellen-Nanking.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 85%"},"xinhai":{"f":"img/xinhai.jpg","d":"武昌起义中的革命军士兵。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_soldiers_at_Wuchang.jpg"},"minguo":{"f":"img/minguo.jpg","d":"1912 年 1 月 1 日，孙中山就任临时大总统后与总统府职员合影。","y":"1912 年 1 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1912%E5%B9%B41%E6%9C%881%E6%97%A5%EF%BC%8C%E5%AD%99%E4%B8%AD%E5%B1%B1%E5%B0%B1%E8%81%8C%E4%B8%AD%E5%8D%8E%E6%B0%91%E5%9B%BD%E4%B8%B4%E6%97%B6%E5%A4%A7%E6%80%BB%E7%BB%9F%E5%90%8E%E4%B8%8E%E6%80%BB%E7%BB%9F%E5%BA%9C%E8%81%8C%E5%91%98%E5%90%88%E5%BD%B1.jpg","p":"50% 35%"},"huguo15":{"f":"img/huguo15.jpg","d":"蔡锷像。1915 年底他在云南起兵讨袁，护国战争由此开始。","y":"1916 年以前","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACai_E.jpg","p":"50% 15%"},"warlord16":{"f":"img/warlord16.jpg","d":"袁世凯戎装像。他 1916 年 6 月死后，北洋分裂为各派军阀。","y":"约 1912 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AYuan_Shikai_in_uniform.jpg","p":"50% 20%"},"may4":{"f":"img/may4.jpg","d":"1919 年 5 月 4 日，北京十三所学校约三千名学生在天安门前集会，反对巴黎和会的山东决议。","y":"1919 年 5 月 4 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_protestors_march_against_the_Treaty_of_Versailles_%28May_4%2C_1919%29.jpg"},"beifa":{"f":"img/beifa.jpg","d":"北伐战争图片拼合：蒋介石检阅国民革命军、北上行军的部队、炮兵作战等。原照摄于 1926—1928 年，2012 年拼合。","y":"1926—1928 年","a":"Futuretrillionaire（拼合）","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3ANorthern_Expedition_collage.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 35%"},"split":{"f":"img/split.jpg","d":"“清党”中被捕押走的共产党人。","y":"1927 年 4 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACommunist_purge.jpg"},"northeast28":{"f":"img/northeast28.jpg","d":"张学良。这一年年底，他宣布东北易帜，服从南京国民政府。","y":"1928 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_1928.jpg","p":"50% 8%"},"918":{"f":"img/918.jpg","d":"日军骑兵开进沈阳。","y":"1931 年 9 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMukden_1931_japan_shenyang.jpg"},"changzheng":{"f":"img/changzheng.jpg","d":"红军干部向长征后的队伍讲话。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALong-march.jpg"},"zunyi35":{"f":"img/zunyi35.jpg","d":"遵义会议会址。1935 年 1 月，中共中央政治局在此开会，调整了军事领导。今景。","y":"2005 年 8 月 8 日摄","a":"小小新手","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3AZunyiMeeting.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩"},"xian":{"f":"img/xian.jpg","d":"事变前两个月的合影：张学良（左）、杨虎城（中）、蒋介石（右）。","y":"1936 年 10 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_Yang_Hucheng_and_Chiang_Kai-shek.jpg","p":"50% 35%"},"q7":{"f":"img/q7.jpg","d":"第二十九军在前线作战。","y":"1937 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AArmy_29_Fighting_1937.jpg"},"wuhan":{"f":"img/wuhan.jpg","d":"武汉外围的中国军队机枪阵地。","y":"1938 年","a":"唐古樵","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_1938.jpg"},"changsha39":{"f":"img/changsha39.jpg","d":"第一次长沙会战中的日军士兵。","y":"1939 年 9 月","a":"日本陆军","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIJA%2C_Battle_of_Changsha%2C_China%2C_September_1939.jpg","p":"50% 40%"},"baituan":{"f":"img/baituan.jpg","d":"八路军攻占娘子关。","y":"1940 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHundred_Regiments_Offensive_1940.jpg"},"newfourth41":{"f":"img/newfourth41.jpg","d":"新四军政治部职员，手执纸烟者为部长林植夫。","y":"1938 年刊","a":"《大美画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E6%96%B0%E5%9B%9B%E5%86%9B%E6%94%BF%E6%B2%BB%E9%83%A8%E8%81%8C%E5%91%98.png","p":"50% 35%"},"henan42":{"f":"img/henan42.jpg","d":"河南大饥荒。饿极的灾民啃食树皮。","y":"1943 年","a":"哈里森·福尔曼（Harrison Forman）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAgsphoto_11239_full.jpg","p":"50% 30%"},"ichigo44":{"f":"img/ichigo44.jpg","d":"日军在粤汉铁路沿线冲锋。豫湘桂战役中国军队大溃退。","y":"1944 年 7 月","a":"《读卖新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AJapanese_troops_performing_a_close_combat_attack_on_Y%C3%BCeh-Han_Railroad.jpg"},"1945":{"f":"img/1945.jpg","d":"南京受降：中国战区受降主官何应钦在日军投降书上签字。","y":"1945 年 9 月 9 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHe_Yinqin_signs_1945.jpg"},"civilwar46":{"f":"img/civilwar46.jpg","d":"四平战役中的共产党军队阵地。","y":"1946 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_of_Siping03.jpg"},"constitution47":{"f":"img/constitution47.jpg","d":"1946 年 12 月 25 日国民大会通过的《中华民国宪法》，1947 年 1 月 1 日公布。","y":"1946 年","a":"国史馆","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1946_National_Assembly_Constitution.jpg","p":"50% 12%"},"campaign48":{"f":"img/campaign48.jpg","d":"淮海战役中，解放军华东坦克大队配合步兵进攻。","y":"1948 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLAHuaihai.jpg"},"founding49":{"f":"img/founding49.jpg","d":"开国大典，毛泽东在天安门城楼宣告中华人民共和国中央人民政府成立。","y":"1949 年 10 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMao_Proclaiming_New_China.JPG","p":"50% 35%"},"korean50":{"f":"img/korean50.jpg","d":"长津湖战役中，美军陆战一师的车队穿过志愿军防线突围。","y":"1950 年 12 月","a":"彼得·麦克唐纳（美国海军陆战队）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChosin.jpg"},"plan53":{"f":"img/plan53.jpg","d":"长春第一汽车制造厂职工欢庆第一批解放牌汽车出厂。","y":"1956 年","a":"袁苓","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_people%27s_pride.jpg","p":"50% 40%"},"greatleap58":{"f":"img/greatleap58.jpg","d":"大炼钢铁的土高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace2.jpg","p":"50% 40%"},"cultural66":{"f":"img/cultural66.jpg","d":"天安门广场上等待接见的红卫兵。","y":"1966 年 9 月 15 日","a":"孟昭瑞","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARed_Guards_in_Tian%27anmen_Square.jpg","p":"50% 55%"},"era_qing":{"f":"img/era_qing.jpg","d":"广州，英国领事馆的本地卫队，远处是六榕寺花塔。","y":"1871 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATARTAR_SOLDIERS.jpg","c":"广州的领事馆卫队"},"era_qing_city":{"f":"img/era_qing_city.jpg","d":"广州西关浆栏街，沿街多是药材铺。","y":"约 1873 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APHYSIC_STREET%2C_CANTON.jpg","c":"广州浆栏街"},"era_republic":{"f":"img/era_republic.jpg","d":"上海南京路。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AShanghai_Nanking_Road_1930s.jpeg","c":"上海南京路"},"era_war":{"f":"img/era_war.jpg","d":"台儿庄战役中的巷战。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuang.jpg","c":"台儿庄巷战"},"era_newchina":{"f":"img/era_newchina.jpg","d":"中苏专家在建设中的武汉长江大桥上。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg","c":"建设中的武汉长江大桥"},"ziqiang_2":{"f":"img/ziqiang_2.jpg","d":"福州船政局全景，左宗棠、沈葆桢创办的近代造船厂。","y":"1898 年前","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AFOOCHOW_ARSENAL.jpg"},"ziqiang_3":{"f":"img/ziqiang_3.jpg","d":"李鸿章，洋务运动的主要主持者。此照摄于他去世的那一年。","y":"1901 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALi_Hongzhang_1901.jpg","p":"50% 12%"},"taiping_2":{"f":"img/taiping_2.jpg","d":"曾国藩像。他组建湘军，主持对太平天国的战事。","y":"1871 年 3 月","a":"吴嘉善","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZeng_Guofan_Photograph.jpg","p":"50% 30%"},"jiawu_2":{"f":"img/jiawu_2.jpg","d":"瑞典讽刺漫画：赴日议和的李鸿章。","y":"1895 年 3 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APolitical_cartoon_of_Li_Hongzhang_1895.png","p":"50% 50%"},"xinhai_2":{"f":"img/xinhai_2.jpg","d":"汉阳的革命军总司令部（一说在古琴台）。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_army_headquarters_at_Hanyang.jpg","p":"50% 40%"},"warlord16_2":{"f":"img/warlord16_2.jpg","d":"北洋陆军操练。","y":"1910 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMilitary_training_of_the_Beiyang_Army.jpg"},"q7_3":{"f":"img/q7_3.jpg","d":"南京，魏特琳（Minnie Vautrin）和她在金陵女子文理学院收容的难民。","y":"1937 年","a":"侵华日军南京大屠杀遇难同胞纪念馆藏","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMinnie_Vautrin_helped_the_refugees_in_1937.jpg","p":"50% 45%"},"wuhan_2":{"f":"img/wuhan_2.jpg","d":"1938 年 6 月黄河花园口决堤，以水阻敌，豫皖苏大片村庄被淹。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1938_Yellow_River_flood.jpg"},"wuhan_3":{"f":"img/wuhan_3.jpg","d":"台儿庄附近，中国士兵伏在被毁的日军卡车旁，前景是一匹死马。","y":"1938 年 4 月","a":"罗伯特·卡帕（Robert Capa）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuangBattlephoto.jpg"},"henan42_2":{"f":"img/henan42_2.jpg","d":"1938 年黄河决堤后的难民群。原为日方宣传照片，原题称难民“为日军所救”。","y":"1938 年","a":"佚名（日方宣传照）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARefugees_of_Yellow_River_Flood.JPG"},"campaign48_2":{"f":"img/campaign48_2.jpg","d":"解放军进入上海南京路。","y":"1949 年 5 月 25 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLA_Troops_entered_to_Nanjing_Road%2C_Shanghai.jpg"},"plan53_2":{"f":"img/plan53_2.jpg","d":"中苏专家在建设中的武汉长江大桥上。大桥是“一五”计划的重点工程。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg"},"transformation56":{"f":"img/transformation56.jpg","d":"建设中的武汉长江大桥。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_Yangtze_River_Bridge_in_construction.jpg"},"leap58":{"f":"img/leap58.jpg","d":"土法炼钢的小高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace4.jpg","p":"50% 55%"},"boxer_2":{"f":"img/boxer_2.jpg","d":"天津美国领事馆前的美国海军陆战队，随后随西摩尔联军北上。","y":"1900 年","a":"肯扬·考克斯（Kenyon Cox）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AUS_Marines_at_American_Consulate%2C_Tianjin%2C_1900_%28CHANDLESS_0%29.jpeg"},"un71":{"f":"img/un71.jpg","d":"尼克松抵达北京，与周恩来握手。中国恢复联合国席位后不到四个月。","y":"1972 年 2 月 21 日","a":"白宫摄影办公室","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:President_Richard_Nixon_and_Premier_Chou_En-Lai_Shake_Hands_at_the_Nixons%27_Arrival_in_Peking,_China_-_DPLA_-_315dbcc0e8b46e1bc678fde12bef9eb8.jpg"},"secondopium56_2":{"f":"img/secondopium56_2.jpg","d":"大沽北炮台一角，攻破后即刻拍摄。阵亡的守兵倒在炮位与壕沟里。","y":"1860 年 8 月 21 日","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Felice_Beato_-_Interior_of_the_Angle_of_Taku_North_Fort_Immediately_After_Its_Capture_by_Storm_-_Google_Art_Project.jpg","p":"50% 60%"},"era_war_2":{"f":"img/era_war_2.jpg","d":"日军轰炸机轰炸重庆。","y":"1940 年 6 月 16 日","a":"《朝日新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E8%BD%9F%E7%82%B8%E9%87%8D%E6%85%B6_%28cropped%29.jpg","c":"日机轰炸重庆"}};
+var PHOTOS={"sinoFrench84":{"f":"img/sinoFrench84.jpg","d":"1884 年 8 月 23 日马江海战：法国远东舰队炮击福州船政局，福建水师几乎全军覆没。英国《伦敦新闻画报》据照片与目击者素描刻印。","y":"1884 年刻版画","a":"约瑟夫·纳什（Joseph Nash）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:BattleFoochow.jpg"},"opium":{"f":"img/opium.jpg","d":"1841 年 1 月，东印度公司铁甲蒸汽船“复仇女神号”与英舰小艇在穿鼻洋击毁清军水师战船。","y":"1843 年绘","a":"爱德华·邓肯（Edward Duncan）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADestroying_Chinese_war_junks%2C_by_E._Duncan_%281843%29.jpg"},"nanjing42":{"f":"img/nanjing42.jpg","d":"1842 年 8 月，《南京条约》在英舰“皋华丽号”上签字用印。","y":"1846 年刊印","a":"约翰·普拉特绘，约翰·伯内特刻版","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThe_Signing_of_the_Treaty_of_Nanking.jpg"},"taiping":{"f":"img/taiping.jpg","d":"湘军攻复安庆。安庆之战是太平天国由盛转衰的转折。","y":"1886 年绘","a":"吴友如","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARegaining_the_Provincial_City_Anqing2.jpg"},"secondopium56":{"f":"img/secondopium56.jpg","d":"1860 年英法联军攻占大沽炮台之后。炮台内，清军守兵的遗体还横在阵地上。","y":"1860 年","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAfter_the_Capture_of_the_Taku_Forts_1860.jpg","p":"50% 55%"},"ziqiang":{"f":"img/ziqiang.jpg","d":"江南制造局搬运火炮。洋务运动时期最大的军工厂。原照为 1900 年前所摄，此为 2009 年翻拍。","y":"1900 年前","a":"原摄影者不详","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AGun_transportation_at_Jiangnan_Arsenal.jpg"},"taipingfall64":{"f":"img/taipingfall64.jpg","d":"清军攻破天京（南京）。太平天国自此覆亡。","y":"19 世纪","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AThird_Battle_of_Nanking.jpg"},"saihai75":{"f":"img/saihai75.jpg","d":"清军与回军在渭河作战。西北战事是塞防之议的背景。","y":"1886—1890 年间绘","a":"庆宽","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_at_the_Wei_River_%28Weihe%29.jpg"},"jiawu":{"f":"img/jiawu.jpg","d":"北洋水师旗舰“定远”号。参加黄海海战，1895 年在威海卫被鱼雷击伤后自毁。","y":"1884—1895 年间","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ADingyuan_%28ship%2C_1884%29_-_NH_1926_-_cropped.jpg"},"wuxu":{"f":"img/wuxu.jpg","d":"康有为像。戊戌变法的主要推动者，变法失败后流亡海外。","y":"年份不详","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AKang-youwei2-large.jpg","p":"50% 22%"},"boxer":{"f":"img/boxer.jpg","d":"八国联军中的英属印度第十六孟加拉骑兵在北京天坛。","y":"1900 年","a":"佚名（理查森爵士相册）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIndian_troops_at_Temple_of_Heaven_Peking_1900.jpg"},"boxer01":{"f":"img/boxer01.jpg","d":"《辛丑条约》签字现场。条约规定赔款四亿五千万两。","y":"1901 年 9 月 7 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E3%80%8A%E8%BE%9B%E4%B8%91%E6%9D%A1%E7%BA%A6%E3%80%8B%E7%AD%BE%E5%AD%97%E6%97%B6%E7%9A%84%E6%83%85%E6%99%AF.jpg"},"abolish_exam05":{"f":"img/abolish_exam05.jpg","d":"南京江南贡院的号舍。考生在这样的隔间里连考数日，1905 年科举停废后空置。今景。","y":"2001 年 4 月摄","a":"Dr. Meierhofer","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3APr%C3%BCfungszellen-Nanking.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 85%"},"xinhai":{"f":"img/xinhai.jpg","d":"武昌起义中的革命军士兵。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_soldiers_at_Wuchang.jpg"},"minguo":{"f":"img/minguo.jpg","d":"1912 年 1 月 1 日，孙中山就任临时大总统后与总统府职员合影。","y":"1912 年 1 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1912%E5%B9%B41%E6%9C%881%E6%97%A5%EF%BC%8C%E5%AD%99%E4%B8%AD%E5%B1%B1%E5%B0%B1%E8%81%8C%E4%B8%AD%E5%8D%8E%E6%B0%91%E5%9B%BD%E4%B8%B4%E6%97%B6%E5%A4%A7%E6%80%BB%E7%BB%9F%E5%90%8E%E4%B8%8E%E6%80%BB%E7%BB%9F%E5%BA%9C%E8%81%8C%E5%91%98%E5%90%88%E5%BD%B1.jpg","p":"50% 35%"},"huguo15":{"f":"img/huguo15.jpg","d":"蔡锷像。1915 年底他在云南起兵讨袁，护国战争由此开始。","y":"1916 年以前","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACai_E.jpg","p":"50% 15%"},"warlord16":{"f":"img/warlord16.jpg","d":"袁世凯戎装像。他 1916 年 6 月死后，北洋分裂为各派军阀。","y":"约 1912 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AYuan_Shikai_in_uniform.jpg","p":"50% 20%"},"may4":{"f":"img/may4.jpg","d":"1919 年 5 月 4 日，北京十三所学校约三千名学生在天安门前集会，反对巴黎和会的山东决议。","y":"1919 年 5 月 4 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_protestors_march_against_the_Treaty_of_Versailles_%28May_4%2C_1919%29.jpg"},"beifa":{"f":"img/beifa.jpg","d":"北伐战争图片拼合：蒋介石检阅国民革命军、北上行军的部队、炮兵作战等。原照摄于 1926—1928 年，2012 年拼合。","y":"1926—1928 年","a":"Futuretrillionaire（拼合）","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3ANorthern_Expedition_collage.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩","p":"50% 35%"},"split":{"f":"img/split.jpg","d":"“清党”中被捕押走的共产党人。","y":"1927 年 4 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ACommunist_purge.jpg"},"northeast28":{"f":"img/northeast28.jpg","d":"张学良，1920 年代中期。1928 年底，他宣布东北易帜，服从南京国民政府。","y":"1925 年前后","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Zhang_Xueliang3.jpg","p":"50% 28%"},"918":{"f":"img/918.jpg","d":"日军骑兵开进沈阳。","y":"1931 年 9 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMukden_1931_japan_shenyang.jpg"},"changzheng":{"f":"img/changzheng.jpg","d":"红军干部向长征后的队伍讲话。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALong-march.jpg"},"zunyi35":{"f":"img/zunyi35.jpg","d":"遵义会议会址。1935 年 1 月，中共中央政治局在此开会，调整了军事领导。今景。","y":"2005 年 8 月 8 日摄","a":"小小新手","l":"CC BY-SA 3.0","s":"https://commons.wikimedia.org/wiki/File%3AZunyiMeeting.jpg","u":"https://creativecommons.org/licenses/by-sa/3.0/deed.zh","m":"已缩放、压缩"},"xian":{"f":"img/xian.jpg","d":"事变前两个月的合影：张学良（左）、杨虎城（中）、蒋介石（右）。","y":"1936 年 10 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZhang_Xueliang%2C_Yang_Hucheng_and_Chiang_Kai-shek.jpg","p":"50% 35%"},"q7":{"f":"img/q7.jpg","d":"第二十九军在前线作战。","y":"1937 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AArmy_29_Fighting_1937.jpg"},"wuhan":{"f":"img/wuhan.jpg","d":"武汉外围的中国军队机枪阵地。","y":"1938 年","a":"唐古樵","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_1938.jpg"},"changsha39":{"f":"img/changsha39.jpg","d":"第一次长沙会战中的日军士兵。","y":"1939 年 9 月","a":"日本陆军","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AIJA%2C_Battle_of_Changsha%2C_China%2C_September_1939.jpg","p":"50% 40%"},"baituan":{"f":"img/baituan.jpg","d":"八路军攻占娘子关。","y":"1940 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHundred_Regiments_Offensive_1940.jpg"},"newfourth41":{"f":"img/newfourth41.jpg","d":"新四军政治部职员，手执纸烟者为部长林植夫。","y":"1938 年刊","a":"《大美画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E6%96%B0%E5%9B%9B%E5%86%9B%E6%94%BF%E6%B2%BB%E9%83%A8%E8%81%8C%E5%91%98.png","p":"50% 35%"},"henan42":{"f":"img/henan42.jpg","d":"河南大饥荒。饿极的灾民啃食树皮。","y":"1943 年","a":"哈里森·福尔曼（Harrison Forman）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AAgsphoto_11239_full.jpg","p":"50% 30%"},"ichigo44":{"f":"img/ichigo44.jpg","d":"日军在粤汉铁路沿线冲锋。豫湘桂战役中国军队大溃退。","y":"1944 年 7 月","a":"《读卖新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AJapanese_troops_performing_a_close_combat_attack_on_Y%C3%BCeh-Han_Railroad.jpg"},"1945":{"f":"img/1945.jpg","d":"南京受降：中国战区受降主官何应钦在日军投降书上签字。","y":"1945 年 9 月 9 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AHe_Yinqin_signs_1945.jpg"},"civilwar46":{"f":"img/civilwar46.jpg","d":"四平战役中的共产党军队阵地。","y":"1946 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABattle_of_Siping03.jpg"},"constitution47":{"f":"img/constitution47.jpg","d":"1946 年 12 月 25 日国民大会通过的《中华民国宪法》，1947 年 1 月 1 日公布。","y":"1946 年","a":"国史馆","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1946_National_Assembly_Constitution.jpg","p":"50% 12%"},"campaign48":{"f":"img/campaign48.jpg","d":"淮海战役中，解放军华东坦克大队配合步兵进攻。","y":"1948 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLAHuaihai.jpg"},"founding49":{"f":"img/founding49.jpg","d":"开国大典，毛泽东在天安门城楼宣告中华人民共和国中央人民政府成立。","y":"1949 年 10 月 1 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMao_Proclaiming_New_China.JPG","p":"50% 35%"},"korean50":{"f":"img/korean50.jpg","d":"长津湖战役中，美军陆战一师的车队穿过志愿军防线突围。","y":"1950 年 12 月","a":"彼得·麦克唐纳（美国海军陆战队）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChosin.jpg"},"plan53":{"f":"img/plan53.jpg","d":"长春第一汽车制造厂职工欢庆第一批解放牌汽车出厂。","y":"1956 年","a":"袁苓","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_people%27s_pride.jpg","p":"50% 40%"},"greatleap58":{"f":"img/greatleap58.jpg","d":"大炼钢铁的土高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace2.jpg","p":"50% 40%"},"cultural66":{"f":"img/cultural66.jpg","d":"天安门广场上等待接见的红卫兵。","y":"1966 年 9 月 15 日","a":"孟昭瑞","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARed_Guards_in_Tian%27anmen_Square.jpg","p":"50% 55%"},"era_qing":{"f":"img/era_qing.jpg","d":"广州，英国领事馆的本地卫队，远处是六榕寺花塔。","y":"1871 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATARTAR_SOLDIERS.jpg","c":"广州的领事馆卫队"},"era_qing_city":{"f":"img/era_qing_city.jpg","d":"广州西关浆栏街，沿街多是药材铺。","y":"约 1873 年","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APHYSIC_STREET%2C_CANTON.jpg","c":"广州浆栏街"},"era_republic":{"f":"img/era_republic.jpg","d":"上海南京路。","y":"1930 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AShanghai_Nanking_Road_1930s.jpeg","c":"上海南京路"},"era_war":{"f":"img/era_war.jpg","d":"台儿庄战役中的巷战。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuang.jpg","c":"台儿庄巷战"},"era_newchina":{"f":"img/era_newchina.jpg","d":"中苏专家在建设中的武汉长江大桥上。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AChinese_and_Soviet_engineers_on_the_Wuhan_Yangtze_River_Bridge.jpg","c":"建设中的武汉长江大桥"},"ziqiang_2":{"f":"img/ziqiang_2.jpg","d":"福州船政局全景，左宗棠、沈葆桢创办的近代造船厂。","y":"1898 年前","a":"约翰·汤姆森（John Thomson）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AFOOCHOW_ARSENAL.jpg"},"ziqiang_3":{"f":"img/ziqiang_3.jpg","d":"李鸿章，洋务运动的主要主持者。此照摄于他去世的那一年。","y":"1901 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ALi_Hongzhang_1901.jpg","p":"50% 12%"},"taiping_2":{"f":"img/taiping_2.jpg","d":"曾国藩像。他组建湘军，主持对太平天国的战事。","y":"1871 年 3 月","a":"吴嘉善","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AZeng_Guofan_Photograph.jpg","p":"50% 30%"},"jiawu_2":{"f":"img/jiawu_2.jpg","d":"瑞典讽刺漫画：赴日议和的李鸿章。","y":"1895 年 3 月","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APolitical_cartoon_of_Li_Hongzhang_1895.png","p":"50% 50%"},"xinhai_2":{"f":"img/xinhai_2.jpg","d":"汉阳的革命军总司令部（一说在古琴台）。","y":"1911 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARevolutionary_army_headquarters_at_Hanyang.jpg","p":"50% 40%"},"warlord16_2":{"f":"img/warlord16_2.jpg","d":"北洋陆军操练。","y":"1910 年代","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMilitary_training_of_the_Beiyang_Army.jpg"},"q7_3":{"f":"img/q7_3.jpg","d":"南京，魏特琳（Minnie Vautrin）和她在金陵女子文理学院收容的难民。","y":"1937 年","a":"侵华日军南京大屠杀遇难同胞纪念馆藏","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AMinnie_Vautrin_helped_the_refugees_in_1937.jpg","p":"50% 45%"},"wuhan_2":{"f":"img/wuhan_2.jpg","d":"1938 年 6 月黄河花园口决堤，以水阻敌，豫皖苏大片村庄被淹。","y":"1938 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A1938_Yellow_River_flood.jpg"},"wuhan_3":{"f":"img/wuhan_3.jpg","d":"台儿庄附近，中国士兵伏在被毁的日军卡车旁，前景是一匹死马。","y":"1938 年 4 月","a":"罗伯特·卡帕（Robert Capa）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ATaierzhuangBattlephoto.jpg"},"henan42_2":{"f":"img/henan42_2.jpg","d":"1938 年黄河决堤后的难民群。原为日方宣传照片，原题称难民“为日军所救”。","y":"1938 年","a":"佚名（日方宣传照）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ARefugees_of_Yellow_River_Flood.JPG"},"campaign48_2":{"f":"img/campaign48_2.jpg","d":"解放军进入上海南京路。","y":"1949 年 5 月 25 日","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3APLA_Troops_entered_to_Nanjing_Road%2C_Shanghai.jpg"},"transformation56":{"f":"img/transformation56.jpg","d":"建设中的武汉长江大桥。","y":"1957 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AWuhan_Yangtze_River_Bridge_in_construction.jpg"},"leap58":{"f":"img/leap58.jpg","d":"土法炼钢的小高炉。","y":"1958 年","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3ABackyard_furnace4.jpg","p":"50% 55%"},"boxer_2":{"f":"img/boxer_2.jpg","d":"天津美国领事馆前的美国海军陆战队，随后随西摩尔联军北上。","y":"1900 年","a":"肯扬·考克斯（Kenyon Cox）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3AUS_Marines_at_American_Consulate%2C_Tianjin%2C_1900_%28CHANDLESS_0%29.jpeg"},"un71":{"f":"img/un71.jpg","d":"尼克松抵达北京，与周恩来握手。中国恢复联合国席位后不到四个月。","y":"1972 年 2 月 21 日","a":"白宫摄影办公室","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:President_Richard_Nixon_and_Premier_Chou_En-Lai_Shake_Hands_at_the_Nixons%27_Arrival_in_Peking,_China_-_DPLA_-_315dbcc0e8b46e1bc678fde12bef9eb8.jpg"},"secondopium56_2":{"f":"img/secondopium56_2.jpg","d":"大沽北炮台一角，攻破后即刻拍摄。阵亡的守兵倒在炮位与壕沟里。","y":"1860 年 8 月 21 日","a":"费利斯·比托（Felice Beato）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Felice_Beato_-_Interior_of_the_Angle_of_Taku_North_Fort_Immediately_After_Its_Capture_by_Storm_-_Google_Art_Project.jpg","p":"50% 60%"},"era_war_2":{"f":"img/era_war_2.jpg","d":"日军轰炸机轰炸重庆。","y":"1940 年 6 月 16 日","a":"《朝日新闻》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File%3A%E8%BD%9F%E7%82%B8%E9%87%8D%E6%85%B6_%28cropped%29.jpg","c":"日机轰炸重庆"}};
 /* 同一年的事件在 V4.10 段被合并（大跃进与人民公社化 → 大跃进），照片跟着并过去 */
 var PH_ALIAS={};   /* V4.19：人民公社化（leap58）恢复为独立事件，照片各归各的 */
 var PH={title:null,list:[],i:0,bad:{},els:null,era:'',lastDate:'',obs:null,galSig:'',galAll:false};
@@ -8704,5 +8754,1804 @@ window.__INTL={
 };
 window.__DLGQ={queue:dlgQueue,open:dlgOpen,next:dlgNext};
 
+/* ================= V4.20：战争与国际冲突 =================
+   - 国家自主宣战：两国紧张度 ≥58、关系 ≤22、进攻方性格偏进取（≥50）、国力（连同盟国）不落下风、两国陆上接壤（intlFront 有对峙地点），
+     且不与史实战争重叠（史实战争开始前 4 年、结束后 3 年内不另开战），1945 年后只在中国周边。同时至多两场 AI 战争，涉华至多一场。
+   - 宣战时守方的盟国大概率参战，攻方盟国小概率参战。
+   - 每月结算一次战局：双方实力（国力 × 国内稳定 × 动员），守方主场加成，叠加随机；战局分 -100（守方大胜）到 +100（攻方大胜）。
+     战争消耗双方经济、稳定与军力；涉华战争每月影响国势，玩家按身份受影响（军人士气、执政者须亲自决断）。
+   - 结束：一方占压倒优势（|战局|≥70）、久战议和（第 4 个月起概率递增，有第三国调停更快）、或拖满 30 个月停战。
+     结果改变国力、稳定、关系；涉华战争改变地图：战败失去一处接壤省份，战胜收复被该国占去的省份。
+   - 停战后两国 15 年内不再开战；同一国 20 年内至多主动开战一次；正卷入史实战争的国家不另开战端。战争在关系锁中视同“交战”。 */
+var WAR_FRONT_PROV={ru:['黑龙江省','新疆维吾尔自治区','内蒙古自治区','吉林省'],jp:['辽宁省','山东省','吉林省'],fr:['广西壮族自治区','云南省'],br:['西藏自治区','云南省'],de:['山东省'],us:[]};
+var WAR_MAPCODE={br:'britain',fr:'france',ru:'russia',de:'germany',jp:'japan',us:'usa'};
+var WAR_STANCE={full:1.25,limited:1,sue:0.8};
+function warList(){ if(!s||!s.intl) return []; if(!Array.isArray(s.intl.wars)) s.intl.wars=[]; return s.intl.wars; }
+function warActive(){ return warList().filter(function(w){ return !w.end; }); }
+function warSide(w,k){ return w.A.indexOf(k)>=0?'A':(w.B.indexOf(k)>=0?'B':''); }
+function warOf(a,b){ var l=warActive(); for(var i=0;i<l.length;i++){ var w=l[i], sa=warSide(w,a), sb=warSide(w,b); if(sa&&sb&&sa!==sb) return w; } return null; }
+function warIn(k){ return warActive().filter(function(w){ return !!warSide(w,k); }); }
+function warSideName(w,side,ord){ var l=side==='A'?w.A:w.B; return l.map(function(k){ return intlName(k,ord); }).join('、'); }
+function warHistNear(a,b,ord){
+ for(var i=0;i<INTL_HIST.length;i++){ var h=INTL_HIST[i]; if(h.k!=='war'&&h.k!=='clash') continue; if(!intlHasPair(h,a,b)) continue; if(h.prc&&!intlPRC()) continue;
+  if(ord>=h.fo-4*365&&ord<(h.uo||h.fo)+3*365) return true; }
+ return false;
+}
+/* 正卷入史实战争（世界大战、鸦片战争等）的国家，不再另开战端 */
+function warHistBusy(k,ord){
+ for(var i=0;i<INTL_HIST.length;i++){ var h=INTL_HIST[i]; if(h.k!=='war'||!intlHistOn(h,ord)) continue;
+  for(var j=0;j<h.ab.length;j++){ if(h.ab[j][0]===k||h.ab[j][1]===k) return true; } }
+ return false;
+}
+function warCdOk(a,b,ord){ var I=s.intl; if(!I.wcd) I.wcd={}; var v=I.wcd[intlPK(a,b)]; return v===undefined||ord>=v; }
+function warPow(k,y,w,side){
+ var p=intlPower(k,y);
+ if(k==='cn') return p*(WAR_STANCE[w.st||'limited']||1);
+ var n=s.intl.n[k]; return p*(0.65+0.35*Math.max(0,Math.min(100,n?n.stab:60))/100);
+}
+function warStrength(w,side,y){
+ var l=side==='A'?w.A:w.B, tot=0;
+ l.forEach(function(k,i){ tot+=warPow(k,y,w,side)*(i===0?1:0.5); });   /* 参战盟国只投入一部分 */
+ if(side==='B') tot*=1.15;                                              /* 守方主场 */
+ return Math.max(1,tot);
+}
+/* 能否宣战：k 对 x */
+function warCan(k,x,ord,y){
+ if(k===x||k==='cn') return false;
+ if(!intlForeign(k,ord)) return false;
+ if(x!=='cn'&&!intlActive(x,ord)) return false;
+ if(y<1850) return false;
+ if(!intlFront(k,x,y)) return false;
+ if(y>=1945&&x!=='cn') return false;
+ if(warIn(k).length||warIn(x).length>1) return false;
+ var act=warActive(); if(act.length>=2) return false;
+ if(x==='cn'&&act.some(function(w){ return !!warSide(w,'cn'); })) return false;
+ if(!warCdOk(k,x,ord)) return false;
+ if(warHistNear(k,x,ord)) return false;
+ if(warHistBusy(k,ord)||warHistBusy(x,ord)) return false;
+ if(s.intl.wlast&&s.intl.wlast[k]!==undefined&&ord-s.intl.wlast[k]<20*365) return false;   /* 同一国 20 年内至多主动开战一次 */
+ var L=_intlLockV420(k,x,ord); if(L&&L.k!=='hostile'&&L.k!=='clash') return false;
+ if(intlTreaties(k,x,'ally').length||intlTreaties(k,x,'nap').length) return false;
+ if(intlTen(k,x)<58||intlRel(k,x)>22) return false;
+ if(intlPers(k,y).agg<50) return false;
+ var pa=intlPower(k,y), px=intlPower(x,y);
+ intlTreaties(k,null,'ally').forEach(function(t){ var z=t.a===k?t.b:t.a; if(z!==x) pa+=intlPower(z,y)*0.3; });
+ intlTreaties(x,null,'ally').forEach(function(t){ var z=t.a===x?t.b:t.a; if(z!==k) px+=intlPower(z,y)*0.5; });
+ return pa>=px*0.85;
+}
+function warLog(t,cn){ try{ log((cn?'【战事】':'【列国】')+t); }catch(e){} }
+function warStart(k,x,ord,y){
+ var I=s.intl, front=intlFront(k,x,y);
+ var w={id:'w'+ord+k+x,A:[k],B:[x],f:ord,front:front,sc:0,mo:0,cas:[0,0],st:'limited',rej:0,log:[]};
+ var joined=[];
+ intlTreaties(x,null,'ally').forEach(function(t){ var z=t.a===x?t.b:t.a; if(z===k||z==='cn'||!intlActive(z,ord)||warIn(z).length||warHistNear(z,k,ord)||warHistBusy(z,ord)) return; if(intlRel(z,k)<55&&intlRand()<0.6){ w.B.push(z); joined.push([z,x]); } });
+ intlTreaties(k,null,'ally').forEach(function(t){ var z=t.a===k?t.b:t.a; if(z===x||z==='cn'||!intlActive(z,ord)||warIn(z).length||warHistNear(z,x,ord)||warHistBusy(z,ord)) return; if(intlRel(z,x)<45&&intlRand()<0.35){ w.A.push(z); joined.push([z,k]); } });
+ warList().push(w);
+ if(!I.wlast) I.wlast={}; I.wlast[k]=ord;
+ w.A.forEach(function(a){ w.B.forEach(function(b){ intlSetTen(a,b,95); intlSetRel(a,b,Math.min(intlRel(a,b),8)); }); });
+ var cn=w.B.indexOf('cn')>=0;
+ var t=intlName(k,ord)+'对'+intlName(x,ord)+'宣战，战事在'+front+'展开。';
+ intlNews(t,'war',k,x,0,cn?'举国震动':'');
+ warLog(t,cn);
+ joined.forEach(function(j){ var tt=intlName(j[0],ord)+'履行同盟义务，站在'+intlName(j[1],ord)+'一边参战。'; intlNews(tt,'war-join',j[0],j[1],0,''); warLog(tt,cn); });
+ if(cn){
+  var me=intlNatl({民心:-1,经济:-1});
+  if(s.isLeader&&intlCentral()) dlgOpen('war',w.id);
+  else if(LIVE_LINE[s.role]==='mil'&&s.unit){ s.unit.mor=clamp((+s.unit.mor||50)+3); warLog('营中奉命开赴'+front+'方向，士气 +3。',true); }
+  if(me) warLog('国势：'+me+'。',true);
+ }
+ if(!I.cd) I.cd={}; I.cd[k+'war'+x]=ord;
+ return w;
+}
+var WAR_TXT_A=['攻势得手，向前推进','连战连捷','突破对方防线','围攻要隘得手'];
+var WAR_TXT_B=['顶住攻势，阵线稳住','反击得手，收复失地','在要隘重创敌军','夜袭得手'];
+function warMonth(ord,y){
+ var I=s.intl;
+ warActive().forEach(function(w){
+  w.mo++;
+  var SA=warStrength(w,'A',y), SB=warStrength(w,'B',y);
+  var d=(SA-SB)/(SA+SB), step=d*30+(intlRand()-0.5)*26;
+  w.sc=Math.max(-100,Math.min(100,Math.round((w.sc+step)*10)/10));
+  var scale=(SA+SB)/2, ca=Math.round(scale*(40+intlRand()*80)*(1-d*0.6)), cb=Math.round(scale*(40+intlRand()*80)*(1+d*0.6));
+  w.cas[0]+=ca; w.cas[1]+=cb;
+  /* 消耗 */
+  ['A','B'].forEach(function(side){
+   var l=side==='A'?w.A:w.B, losing=side==='A'?w.sc<-30:w.sc>30;
+   l.forEach(function(k){
+    if(k==='cn') return; var n=I.n[k]; if(!n) return;
+    n.eco=intlCl(n.eco-1.2,-25,25); n.stab=intlCl(n.stab-(losing?1.6:0.6),0,100); n.mil=intlCl(n.mil-0.4,-20,25);
+   });
+  });
+  var cnSide=warSide(w,'cn');
+  if(cnSide){
+   var cnWin=cnSide==='A'?step>0:step<0, nd={财政:intlRand()<0.5?-1:0};
+   if(!cnWin&&intlRand()<0.5) nd.民心=-1;
+   if(w.st==='full'&&intlRand()<0.6) nd.财政=(nd.财政||0)-1;
+   if(intlRand()<0.3) nd.军事=cnWin?1:-1;
+   var line=intlNatl(nd);
+   var enemy=warSideName(w,cnSide==='A'?'B':'A',ord);
+   var txt=w.front+'：'+(cnWin?'我军'+WAR_TXT_B[Math.floor(intlRand()*WAR_TXT_B.length)]:enemy+'军'+WAR_TXT_A[Math.floor(intlRand()*WAR_TXT_A.length)])+'。';
+   var me='';
+   if(LIVE_LINE[s.role]==='mil'&&s.unit&&!s.isLeader){ s.unit.mor=clamp((+s.unit.mor||50)+(cnWin?2:-2)); me='所部士气 '+(cnWin?'+2':'-2'); if(cnWin&&intlRand()<0.35){ s.fame=(+s.fame||0)+1; me+='，声望 +1'; } }
+   if(w.mo%2===1||Math.abs(step)>15){ intlNews(txt,'war-mo',w.A[0],w.B[0],0,[line?'国势：'+line:'',me].filter(Boolean).join('；')); warLog(txt+(line?'（国势：'+line+'）':'')+(me?'（'+me+'）':''),true); }
+  }else if(Math.abs(step)>18){
+   var who=step>0?warSideName(w,'A',ord):warSideName(w,'B',ord);
+   intlNews(w.front+'：'+who+'方'+(step>0?WAR_TXT_A:WAR_TXT_B)[Math.floor(intlRand()*4)]+'。','war-mo',w.A[0],w.B[0],0,'');
+  }
+  /* 结束判定 */
+  if(Math.abs(w.sc)>=70){ warEnd(w,w.sc>0?'A':'B','decisive',ord,y); return; }
+  if(w.mo>=30){ warEnd(w,null,'armistice',ord,y); return; }
+  if(w.mo>=4){
+   var med=null; INTL_KEYS.forEach(function(z){ if(warSide(w,z)||!intlActive(z,ord)) return; if(intlRel(z,w.A[0])>=55&&intlRel(z,w.B[0])>=55) med=med||z; });
+   var p=Math.min(0.6,0.04*(w.mo-3)+(Math.abs(w.sc)>=40?0.15:0)+(med?0.1:0));
+   if(intlRand()<p){
+    var win=Math.abs(w.sc)<20?null:(w.sc>0?'A':'B');
+    if(cnSide&&s.isLeader&&intlCentral()&&!s.dead){
+     if(ord-(w.rej||-9999)<120) return;
+     w.offer={win:win,med:med||'',o:ord}; dlgOpen('peace',w.id); return;
+    }
+    warEnd(w,win,'talks',ord,y,med);
+   }
+  }
+ });
+}
+function warProvLose(w,enemy,ord){
+ if(!world) return '';
+ world.owner=world.owner||{};
+ var code=WAR_MAPCODE[enemy], list=(WAR_FRONT_PROV[enemy]||[]).filter(function(p){ return world.owner[p]!==code; });
+ if(!list.length||!code) return '';
+ var p=list[Math.floor(intlRand()*list.length)];
+ if(!w.prev) w.prev={};
+ w.prev[p]=world.owner.hasOwnProperty(p)?world.owner[p]:null;
+ world.owner[p]=code;
+ if(!s.intl.occ) s.intl.occ={};
+ s.intl.occ[p]={k:enemy,prev:w.prev[p]};
+ try{ renderMap(); }catch(e){}
+ return p;
+}
+function warProvGain(enemy){
+ if(!world||!world.owner) return [];
+ var code=WAR_MAPCODE[enemy], got=[], occ=(s.intl.occ||{});
+ Object.keys(world.owner).forEach(function(p){
+  if(world.owner[p]!==code) return;
+  if(occ[p]&&occ[p].k===enemy&&occ[p].prev) world.owner[p]=occ[p].prev; else delete world.owner[p];
+  delete occ[p]; got.push(p);
+ });
+ if(got.length) try{ renderMap(); }catch(e){}
+ return got;
+}
+var WAR_HOW={decisive:'决定性胜利',talks:'议和',armistice:'久战无果，停战',sue:'求和'};
+function warEnd(w,win,how,ord,y,med){
+ var I=s.intl; if(w.end) return;
+ w.end=ord; w.win=win||''; w.how=how; w.offer=null;
+ if(!I.wcd) I.wcd={};
+ w.A.forEach(function(a){ w.B.forEach(function(b){ I.wcd[intlPK(a,b)]=ord+15*365; intlSetTen(a,b,50); intlSetRel(a,b,win?18:26); }); });
+ ['A','B'].forEach(function(side){
+  var l=side==='A'?w.A:w.B, won=win===side, lost=win&&win!==side;
+  l.forEach(function(k){ if(k==='cn') return; var n=I.n[k]; if(!n) return;
+   if(won){ n.eco=intlCl(n.eco+2,-25,25); n.stab=intlCl(n.stab+5,0,100); }
+   if(lost){ n.eco=intlCl(n.eco-5,-25,25); n.stab=intlCl(n.stab-12,0,100); n.mil=intlCl(n.mil-4,-20,25); }
+  });
+ });
+ var cnSide=warSide(w,'cn'), A=warSideName(w,'A',ord), B=warSideName(w,'B',ord);
+ var t=w.front+'战事结束：'+(win?(win==='A'?A:B)+'方'+(how==='decisive'?'大胜':'占上风')+'，'+(how==='decisive'?'对方被迫':'双方')+'议定和约':WAR_HOW[how]||'停战')+(med?'（'+intlName(med,ord)+'从中调停）':'')+'。';
+ var extra='';
+ if(cnSide){
+  var enemy=(cnSide==='A'?w.B:w.A)[0];
+  if(win&&win!==cnSide){
+   var nl=intlNatl({国际:-3,财政:-4,民心:-3}), p=how==='sue'?'':warProvLose(w,enemy,ord);
+   extra=(p?p+'落入'+intlName(enemy,ord)+'之手；':'')+'赔款'+(how==='sue'?'了事':'')+'。国势：'+nl;
+   if(p) try{ log('【失地】'+p+'被'+intlName(enemy,ord)+'占去。'); }catch(e){}
+  }else if(win===cnSide){
+   var g=warProvGain(enemy), nl2=intlNatl({国际:4,民心:3,军事:2});
+   extra=(g.length?'收复'+g.join('、')+'；':'')+'国势：'+nl2;
+   if(LIVE_LINE[s.role]==='mil'&&!s.isLeader){ s.fame=(+s.fame||0)+3; extra+='；你随军有功，声望 +3'; }
+  }else extra='国势：'+intlNatl({财政:-1});
+ }else if(win){
+  extra=(win==='A'?B:A)+'割地赔款，国内动荡。';
+ }
+ w.res=t+(extra?' '+extra:'');
+ intlNews(t,'war-end',w.A[0],w.B[0],0,extra);
+ warLog(t+(extra?'（'+extra+'）':''),!!cnSide);
+}
+/* ---------- 执政者的决断 ---------- */
+function warFind(id){ var l=warList(); for(var i=0;i<l.length;i++) if(l[i].id===id) return l[i]; return null; }
+function warDlgBase(tag,title,desc,opts){
+ $('dlgTag').textContent=tag+' · '+calFmtOrd(s.cal.ord); $('dlgTitle').textContent=title; $('dlgDesc').textContent=desc;
+ var body=$('dlgBody'); body.innerHTML='';
+ opts.forEach(function(o){
+  var b=document.createElement('button'); b.className='choice';
+  b.innerHTML='<b>'+o.t+'</b><div class="sub">'+o.d+'</div>';
+  b.onclick=function(){ var r=o.run(); if(r) try{ log('【战事】'+o.t+'。'+r); }catch(e){} $('mask').classList.add('hidden'); try{ persist(); render(); }catch(e){} };
+  body.appendChild(b);
+ });
+ $('mask').classList.remove('hidden');
+ return true;
+}
+function warStartDlg(id){
+ var w=warFind(id); if(!w||w.end||!s) return false;
+ var ord=s.cal.ord, cs=warSide(w,'cn'), E=warSideName(w,cs==='A'?'B':'A',ord), y=calFromOrd(ord).y;
+ var ratio=Math.round(warStrength(w,cs==='A'?'B':'A',y)/Math.max(1,warStrength(w,cs,y))*10)/10;
+ return warDlgBase('战事',E+'来犯',E+'对我宣战，兵锋指向'+w.front+'。眼下敌我实力约为 '+ratio+' 比 1。怎么打，由你定。',[
+  {t:'举国动员，全力迎战',d:'战力提高两成半，但每月财政多耗一分。',run:function(){ w.st='full'; return '国势：'+intlNatl({民心:2,财政:-2}); }},
+  {t:'就地防御，有限抵抗',d:'按常规兵力应战，不额外加派。',run:function(){ w.st='limited'; return ''; }},
+  {t:'遣使求和',d:'割让利权、赔款了事，免得生灵涂炭，但民心与国际地位受损。',run:function(){ w.st='sue'; warEnd(w,cs==='A'?'B':'A','sue',s.cal.ord,calFromOrd(s.cal.ord).y); return '国势：'+intlNatl({民心:-3}); }}
+ ]);
+}
+function warPeaceDlg(id){
+ var w=warFind(id); if(!w||w.end||!w.offer||!s) return false;
+ var ord=s.cal.ord, cs=warSide(w,'cn'), E=warSideName(w,cs==='A'?'B':'A',ord), win=w.offer.win;
+ var desc=(w.offer.med?intlName(w.offer.med,ord)+'出面调停，':'')+E+'提出议和。'+(win?(win===cs?'眼下我军占优，对方愿意让步。':'眼下敌军占优，对方要求割地赔款。'):'双方相持不下，对方提议各自罢兵。')+'战局 '+Math.round(cs==='A'?w.sc:-w.sc)+'（正数为我方占优），已打了 '+w.mo+' 个月。';
+ return warDlgBase('议和',E+'的和议',desc,[
+  {t:'接受和议',d:win&&win!==cs?'签约停战，要失地赔款。':'签约停战。',run:function(){ warEnd(w,win,'talks',s.cal.ord,calFromOrd(s.cal.ord).y,w.offer&&w.offer.med); return ''; }},
+  {t:'拒绝，继续作战',d:'四个月内不再议和。',run:function(){ w.rej=s.cal.ord; w.offer=null; return '国势：'+intlNatl(win&&win!==cs?{民心:1}:{}); }}
+ ]);
+}
+DLGQ_OPEN.war=function(id){ return warStartDlg(id); };
+DLGQ_OPEN.peace=function(id){ return warPeaceDlg(id); };
+/* ---------- 接到 V4.19 的国家 AI 上 ---------- */
+var _intlLockV420=intlLock;
+intlLock=function(a,b,ord){
+ var L=_intlLockV420(a,b,ord);
+ if(L&&L.k==='war') return L;
+ if(s&&s.intl&&Array.isArray(s.intl.wars)){ var w=warOf(a,b); if(w) return {k:'war',id:'ai:'+w.id,t:w.front+'战事',ai:1}; }
+ return L;
+};
+var _intlCandV420=intlCandidates;
+intlCandidates=function(k,ord,y){
+ var out=_intlCandV420(k,ord,y);
+ if(intlForeign(k,ord)&&!warIn(k).length){
+  var P=intlPers(k,y), goal=intlGoal(k,y);
+  INTL_ALL.forEach(function(x){
+   if(!warCan(k,x,ord,y)) return;
+   if(intlRand()>(x==='cn'?0.35:0.18)) return;   /* 条件具备也未必立即动手；列强之间开战更慎重 */
+   var ratio=intlPower(k,y)/Math.max(1,intlPower(x,y));
+   out.push({a:'war',x:x,u:12+(intlTen(k,x)-58)*0.8+(22-intlRel(k,x))*0.4+(P.agg-50)*0.5+Math.min(15,(ratio-1)*20)+(goal[4]===x?8:0)+intlRand()*8});
+  });
+ }
+ return out;
+};
+var _intlDoV420=intlDo;
+intlDo=function(k,c,ord,y){
+ if(c.a!=='war') return _intlDoV420(k,c,ord,y);
+ warStart(k,c.x,ord,y); s.intl.n[k].acts=(s.intl.n[k].acts||0)+1; s.intl.dec=(s.intl.dec||0)+1;
+};
+INTL_ACT_NAME.war='宣战';
+var _intlRunMonthV420=intlRunMonth;
+intlRunMonth=function(mk){
+ _intlRunMonthV420(mk);
+ try{ var ord=s.cal.ord; warMonth(ord,calFromOrd(ord).y); }catch(e){ if(window.console) console.error(e); }
+};
+var _intlEnsureV420=intlEnsure;
+intlEnsure=function(){ var I=_intlEnsureV420(); if(I){ if(!Array.isArray(I.wars)) I.wars=[]; if(!I.wcd) I.wcd={}; if(!I.occ) I.occ={}; } return I; };
+var _intlLeadV420=intlLead;
+intlLead=function(ord){
+ var a=warActive(); if(a.length){ return a.map(function(w){ return warSideName(w,'A',ord)+'与'+warSideName(w,'B',ord)+'在'+w.front+'交战'; }).slice(0,2).join('；')+'。'; }
+ return _intlLeadV420(ord);
+};
+function warCardHTML(ord){
+ var y=calFromOrd(ord).y, rows=[];
+ warActive().forEach(function(w){ rows.push(w); });
+ warList().forEach(function(w){ if(w.end&&ord-w.end<3*365) rows.push(w); });
+ if(!rows.length) return '';
+ return '<div class="intl-sec"><b>战事</b>'+rows.slice(0,4).map(function(w){
+  var A=warSideName(w,'A',ord), B=warSideName(w,'B',ord), v=Math.round(w.sc), pct=Math.round((v+100)/2);
+  var state=w.end?(w.win?(w.win==='A'?A:B)+'胜 · '+(WAR_HOW[w.how]||'议和'):WAR_HOW[w.how]||'停战'):(Math.abs(v)<15?'相持':(v>0?A+'占优':B+'占优'));
+  return '<div class="war-row'+(w.end?' done':'')+'"><div class="war-top"><span class="war-n">'+intlEsc(A)+' <i>对</i> '+intlEsc(B)+'</span><span class="small muted">'+intlEsc(w.front)+' · '+(w.end?calFromOrd(w.f).y+'—'+calFromOrd(w.end).y+'年':'第 '+w.mo+' 个月')+'</span></div>'+
+   '<div class="war-bar" role="img" aria-label="战局 '+v+'"><span class="war-a" style="width:'+pct+'%"></span><span class="war-mid"></span></div>'+
+   '<div class="war-st small"><span>'+intlEsc(A)+'</span><span class="'+(w.end?'':'war-live')+'">'+intlEsc(state)+'</span><span>'+intlEsc(B)+'</span></div></div>';
+ }).join('')+'</div>';
+}
+var _intlCardV420=intlCardHTML;
+intlCardHTML=function(){
+ var h=_intlCardV420.apply(this,arguments), w=warCardHTML(s.cal.ord);
+ if(!w) return h;
+ var i=h.indexOf('<div class="intl-head');
+ return i>0?h.slice(0,i)+w+h.slice(i):w+h;
+};
+var _packV420=packSave;
+packSave=function(){ var o=_packV420.apply(null,arguments); o.v='4.20'; return o; };
+window.__WAR={day:function(){ intlDay(); },list:warList,active:warActive,can:function(k,x){ return warCan(k,x,s.cal.ord,calFromOrd(s.cal.ord).y); },start:function(k,x){ return warStart(k,x,s.cal.ord,calFromOrd(s.cal.ord).y); },month:function(){ warMonth(s.cal.ord,calFromOrd(s.cal.ord).y); },end:function(w,win,how){ warEnd(w,win,how||'talks',s.cal.ord,calFromOrd(s.cal.ord).y); },of:warOf,strength:function(w,side){ return warStrength(w,side,calFromOrd(s.cal.ord).y); }};
+
+/* ================= V4.19.1：行动结果配图 =================
+   办完一件耗时的事，结果弹窗顶部配一到两张图。优先用真实老照片（img/sc，Wikimedia Commons 等，逐张署名）；
+   真实照片拍不到的个人场景（送礼、请托、借贷、讨债、夜读、静待）才用 AI 示意图（img/ai），图上与说明里都标“AI 生成示意”。
+   只取与当前年代相符的图；同一张图近期不重复。 */
+var SCENES=[{"f":"img/sc/sc_coolie_qing_1.jpg","d":"挑夫肩挑货担走过街口","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_coolies_carry_their_burdens.jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_coolie_qing_2.jpg","d":"几名苦力合力扛运一根大木","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Men_carrying_a_large_log,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0053).jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_workshop_qing_1.jpg","d":"木匠在屋前架锯解木","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:SAWYERS_AT_WORK.jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_mine_qing_1.jpg","d":"矿工在山坡上刨挖煤炭","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:COAL_MINERS.jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_craft_qing_1.jpg","d":"走街串巷的锔碗匠在修补瓷器","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:An_itinerant_crockery_mender,_Changde,_Hunan,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0057).jpg","act":["work","study"],"e":"q"},{"f":"img/sc/sc_farm_qing_1.jpg","d":"农夫赶着水牛犁田（湖南常德）","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Plowing_with_a_water_buffalo,_Changde,_Hunan,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0079).jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_farm_qing_2.jpg","d":"农人在水田里耘禾","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Three_men_working_in_a_rice_field,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0082).jpg","act":["work"],"e":"q"},{"f":"img/sc/sc_street_qing_1.jpg","d":"街边摆摊的各色手艺人与小贩","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_Street_Industries.jpg","act":["work","earn","gossip"],"e":"q"},{"f":"img/sc/sc_street_qing_2.jpg","d":"广州上门台街，店铺招牌林立","y":"1870","a":"A Chan（亚珍）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Sheung-mun-tai_street_in_Canton,_A._Chan,_1870.jpg","act":["gossip","earn"],"e":"q"},{"f":"img/sc/sc_market_qing_1.jpg","d":"四川集镇的街市","y":"约1898","a":"Isabella Bird（J. F. Bishop）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Market_street_in_Szechuan.jpg","act":["earn","gossip"],"e":"q"},{"f":"img/sc/sc_street_qing_3.jpg","d":"上海街景，彩旗招牌与黄包车（手工上色幻灯片）","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Street_scene_in_Shanghai,_Shanghai_Shi,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0086).jpg","act":["gossip","earn"],"e":"q"},{"f":"img/sc/sc_dock_qing_1.jpg","d":"人货拥挤的渡口码头","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Crowded_boat-landing,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0034).jpg","act":["work","earn"],"e":"q"},{"f":"img/sc/sc_money_qing_1.jpg","d":"钱庄伙计“看洋钱”，验看银元成色","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:SCHROFFING_DOLLARS.jpg","act":["earn","office"],"e":"q"},{"f":"img/sc/sc_shop_qing_1.jpg","d":"茶庄里谈生意的茶商","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_Tea_Dealers.jpg","act":["earn","befriend"],"e":"q"},{"f":"img/sc/sc_teahouse_qing_1.jpg","d":"临街茶馆里喝茶闲谈的人（湖南常德）","y":"约1900–1919","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_teashop_opening_off_the_street,_Changde,_Hunan,_China,_ca.1900-1919_(IMP-YDS-RG008-358-0008-0017).jpg","act":["gossip","befriend"],"e":"q"},{"f":"img/sc/sc_gamble_qing_1.jpg","d":"路边围拢赌钱的闲汉","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:WAYSIDE_GAMBLING.jpg","act":["gossip","rest"],"e":"q"},{"f":"img/sc/sc_official_qing_1.jpg","d":"着官服的清朝官员","y":"约1869","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:A_Mandarin_official,_photograph_by_John_Thomson,_1869.jpg","act":["office","petition"],"e":"q"},{"f":"img/sc/sc_yamen_qing_1.jpg","d":"兵勇簇拥着一位地方官员（湖南常德）","y":"约1898–1910","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_soldiers_standing_alongside_a_man_of_importance,_Changde,_Hunan,_China,_ca.1898-1910_(IMP-YDS-RG008-358-0008-0011).jpg","act":["office","inspect"],"e":"q"},{"f":"img/sc/sc_sedan_qing_1.jpg","d":"轿夫抬着轿子出行","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:THE_SEDAN.jpg","act":["office","befriend"],"e":"q"},{"f":"img/sc/sc_study_qing_1.jpg","d":"老读书人伏案苦读，求取功名","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:READING_FOR_HONOURS.jpg","act":["study"],"e":"q"},{"f":"img/sc/sc_study_qing_2.jpg","d":"挟着书本的学童","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:A_CHINESE_SCHOOL-BOY.jpg","act":["study"],"e":"q"},{"f":"img/sc/sc_drill_qing_1.jpg","d":"由洋教习训练的清军列队","y":"1867–1868","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_Troops_Drilled_by_Foreigners_1867-1868.png","act":["drill"],"e":"q"},{"f":"img/sc/sc_drill_qing_2.jpg","d":"新军士兵列队操练","y":"1905","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Qing_new_army_1905.jpg","act":["drill"],"e":"q"},{"f":"img/sc/sc_family_qing_1.jpg","d":"一家人在供桌前祭祀祖先（湖南常德）","y":"约1898–1910","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Veneration_of_ancestors,_Changde,_Hunan,_China,_ca.1898-1910_(IMP-YDS-RG008-358-0008-0020).jpg","act":["rest"],"e":"q"},{"f":"img/sc/sc_punish_qing_1.jpg","d":"戴枷示众的犯人","y":"约1870","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Thomson,_John_-_Der_Pranger_(Zeno_Fotografie).jpg","act":["arrest"],"e":"q"},{"f":"img/sc/sc_visit_qing_1.jpg","d":"中式厅堂里的宾主（湖南常德）","y":"约1901–1903","a":"佚名（Yale Divinity Library, Logan family collection）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Reception_hall_of_the_Logan_family%27s_first_home_in_Changde,_Hunan,_China,_ca.1901-1903_(IMP-YDS-RG008-358-0008-0002).jpg","act":["befriend","visit"],"e":"q"},{"f":"img/sc/sc_beggar_qing_1.jpg","d":"街头衣衫褴褛的乞丐","y":"约1868–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Beggar_kings.jpg","act":["disaster"],"e":"q"},{"f":"img/sc/sc_street_rep_1.jpg","d":"北京弓箭胡同街景","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Bow_and_Arrow_Street.jpg","act":["gossip"],"e":"r"},{"f":"img/sc/sc_shop_rep_1.jpg","d":"上海南京路上的华商店铺","y":"1927","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Shanghai_of_Today,_Plate_19_-_Chinese_shops_on_Nanking_Road.jpg","act":["earn"],"e":"r"},{"f":"img/sc/sc_street_rep_2.jpg","d":"广州城内街巷","y":"1920","a":"United States Bureau of Navigation","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Canton1920_d031_a_city_street.jpg","act":["gossip","earn"],"e":"r"},{"f":"img/sc/sc_rickshaw_rep_1.jpg","d":"广州长堤先施公司前候客的黄包车","y":"1928","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Sincere_Company_Canton_1928.JPG","act":["work","earn"],"e":"r"},{"f":"img/sc/sc_workshop_rep_1.jpg","d":"北京景泰蓝作坊里的工匠","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Cloissone_Making.jpg","act":["work"],"e":"r"},{"f":"img/sc/sc_craft_rep_1.jpg","d":"老人在街边纳鞋底","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:STITCHING_SOLES.jpg","act":["work"],"e":"r"},{"f":"img/sc/sc_school_rep_1.jpg","d":"工艺学校学生在车间实习","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Industrial_Training;_shop_practice.jpg","act":["study","work"],"e":"r"},{"f":"img/sc/sc_teahouse_rep_1.jpg","d":"上海城隍庙湖心亭茶楼与九曲桥","y":"1927","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Shanghai_of_Today,_Plate_32_-_Chinese_Tea_House_with_Nine-Turn_Bridge.jpg","act":["gossip","befriend"],"e":"r"},{"f":"img/sc/sc_bund_rep_1.jpg","d":"上海外滩，洋行银行林立","y":"1927","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Shanghai_of_Today,_Plate_15_-_Shanghai_Bund.jpg","act":["earn","office"],"e":"r"},{"f":"img/sc/sc_lecture_rep_1.jpg","d":"向平民宣讲新思想的讲演会场","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Spreading_Modem_Ideas_Among_the_Common_People.jpg","act":["organize"],"e":"r"},{"f":"img/sc/sc_protest_rep_1.jpg","d":"北京学生上街示威（六三运动）","y":"1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Student_Demonstrations,_June_4th_and_5th,_1919_1.jpg","act":["organize"],"e":"r"},{"f":"img/sc/sc_arrest_rep_1.jpg","d":"被军警押往监狱的学生","y":"1919-06-04","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Arrested_Students_Going_to_Jail.jpg","act":["organize","arrest"],"e":"r"},{"f":"img/sc/sc_rally_rep_1.jpg","d":"上海一场政治集会上振臂演说的青年","y":"1930年代（推断，原图未注日期）","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:A_Chinese_Agitator_in_a_Political_Meeting_in_Shanghai.png","act":["organize"],"e":"r"},{"f":"img/sc/sc_cadet_rep_1.jpg","d":"黄埔军校学员持旗参加广州游行集会","y":"1925-06-23","a":"佚名","l":"CC BY 4.0","s":"https://commons.wikimedia.org/wiki/File:Whampoa_cadets_with_banners_and_flags,_protest_rally_Canton.jpg","act":["drill","organize"],"e":"r","u":"https://creativecommons.org/licenses/by/4.0","m":"已缩放、压缩"},{"f":"img/sc/sc_soldier_rep_1.jpg","d":"淞沪抗战中在闸北作战的十九路军","y":"1932-02","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_soldiers_of_the_19th_Army_fighting_in_Chabei_district.jpg","act":["drill"],"e":"r"},{"f":"img/sc/sc_beggar_rep_1.jpg","d":"北京一户乞丐人家","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:A_Typical_Beggar_Family.jpg","act":["disaster"],"e":"r"},{"f":"img/sc/sc_cart_rep_1.jpg","d":"北京街头的骡车","y":"1917–1919","a":"Sidney D. Gamble","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:One_OF_Peking%27s_4,198_indestructible_carts.jpg","act":["work","earn"],"e":"r"},{"f":"img/sc/sc_streetfood_rep_1.jpg","d":"北京街头小吃摊前吃饭的人","y":"1930年代","a":"Nationaal Archief","l":"无已知版权限制（Flickr Commons）","s":"https://commons.wikimedia.org/wiki/File:Etende_Chinezen_op_straat_-_Eating_with_chopsticks_in_the_streets_of_Beijing_(4901055816).jpg","act":["rest","gossip"],"e":"r"},{"f":"img/sc/sc_station_rep_1.jpg","d":"杭州城站火车站","y":"1937-02","a":"民國二十六年二月東南日報新廈落成紀念特刊","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:%E6%9D%AD%E5%B7%9E%E5%9F%8E%E7%AB%99%E7%81%AB%E8%BB%8A%E7%AB%99%EF%BC%88%E6%9D%B1%E5%8D%97%E6%97%A5%E5%A0%B1%E7%94%B1%E6%AD%A4%E9%81%8B%E5%BE%80%E4%BA%AC%E6%BB%AC%E5%90%84%E5%9C%B0%EF%BC%89.jpg","act":["earn"],"e":"r"},{"f":"img/sc/sc_refugee_war_1.jpg","d":"上海战事爆发，满载家当的逃难板车","y":"1937-08-13","a":"Naval History and Heritage Command NH 77756 courtesy of Vice Admiral Morton L. Deyo, USN","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:NH_77756.jpg","act":["disaster"],"e":"w"},{"f":"img/sc/sc_refugee_war_2.jpg","d":"南京栖霞寺难民收容所","y":"1937–1938","a":"佚名（侵华日军南京大屠杀遇难同胞纪念馆藏）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Refugees_in_the_Qixia_Temple_Refugee_Shelter.jpg","act":["disaster"],"e":"w"},{"f":"img/sc/sc_relief_war_1.jpg","d":"南京难民收容所的施粥厂","y":"1937–1938","a":"佚名（侵华日军南京大屠杀遇难同胞纪念馆藏）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Porridge_factories_in_a_refugee_shelter_in_1937.jpg","act":["disaster","office"],"e":"w"},{"f":"img/sc/sc_wedding_war_1.jpg","d":"重庆集体婚礼","y":"1941-11-12","a":"Harrison Forman","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Collective_wedding_Chungking_1941.jpg","act":["rest","befriend"],"e":"w"},{"f":"img/sc/sc_vendor_war_1.jpg","d":"昆明街头靠卖烟头为生的妇女","y":"1944-10-18","a":"佚名（美国国家档案馆 NARA 藏）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:This_Chinese_woman_does_a_thriving_business_in_selling_cigarette_butts_to_the_poor_of_Kunming._-_NARA_-_196232.jpg","act":["earn","work"],"e":"w"},{"f":"img/sc/sc_labor_war_1.jpg","d":"数百民工拉动石碾修筑机场跑道","y":"1944-03","a":"United States Army","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Hundreds_of_Chinese_laborers_pull_a_roller_to_smooth_a_runway_for_an_airstrip.jpg","act":["work"],"e":"w"},{"f":"img/sc/sc_production_war_1.jpg","d":"陕甘宁边区大生产运动中摇纺车的人们","y":"1940年代初（原题作1936年）","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1967-10_1936%E5%B9%B4%E5%BB%B6%E5%AE%89%E5%A4%A7%E7%94%9F%E4%BA%A7%E8%BF%90%E5%8A%A8.jpg","act":["work"],"e":"w"},{"f":"img/sc/sc_streetplay_war_1.jpg","d":"抗战街头剧《放下你的鞭子》","y":"抗战期间（1937–1945）","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1965-9_%E6%8A%97%E6%97%A5%E6%88%98%E4%BA%89%E6%9C%9F%E9%97%B4%E7%9A%84%E8%A1%97%E5%A4%B4%E5%89%A7_%E6%94%BE%E4%B8%8B%E4%BD%A0%E7%9A%84%E9%9E%AD%E5%AD%90.jpg","act":["organize"],"e":"w"},{"f":"img/sc/sc_lecture_war_1.jpg","d":"毛泽东在抗日军政大学讲话","y":"1938","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1967-10_1938%E5%B9%B4%E6%AF%9B%E6%B3%BD%E4%B8%9C%E5%9C%A8%E6%8A%97%E6%97%A5%E5%86%9B%E6%94%BF%E5%A4%A7%E5%AD%A6.jpg","act":["study","organize"],"e":"w"},{"f":"img/sc/sc_drill_war_1.jpg","d":"印度兰姆伽训练中心的中国驻印军","y":"1944-06","a":"T/4 Lobner","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Chinese_troops_at_Ramgarh_Training_Center_NARA_111-SC-193543cropped.jpg","act":["drill"],"e":"w"},{"f":"img/sc/sc_soldier_war_1.jpg","d":"长城上的八路军号兵（沙飞摄）","y":"1942","a":"Sha Fei","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Eighth_Route_Army_bugler.jpg","act":["drill"],"e":"w"},{"f":"img/sc/sc_soldier_war_2.jpg","d":"背着行装准备登机的十岁中国小兵","y":"1944-12-05","a":"佚名（美国国家档案馆 NARA 藏）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:This_Chinese_soldier,_age_10,_with_heavy_pack,_is_a_member_of_a_Chinese_division_which_is_boarding_planes_at_the..._-_NARA_-_531234.tif","act":["drill"],"e":"w"},{"f":"img/sc/sc_notice_war_1.jpg","d":"八路军攻克任丘后张贴安民告示","y":"1944","a":"河北摄影家协会","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1944_Renqiu_01.jpg","act":["organize","office"],"e":"w"},{"f":"img/sc/sc_liberation_war_1.jpg","d":"北平和平解放，入城部队宣传车经过西四牌楼","y":"1949-02","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:%E5%8C%97%E5%B9%B3%E5%92%8C%E5%B9%B3%E8%A7%A3%E6%94%BE%E4%B9%8B%E8%A5%BF%E5%9B%9B%E7%89%8C%E6%A5%BC.jpg","act":["organize"],"e":"w"},{"f":"img/sc/sc_landreform_new_1.jpg","d":"湖南岳阳农民组建分田委员会","y":"1951","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:195105_%E6%B9%96%E5%8D%97%E5%B2%B3%E9%98%B3%E5%8E%BF%E7%AC%AC%E4%B8%80%E5%8C%BA%E7%BB%84%E5%BB%BA%E5%88%86%E7%94%B0%E5%A7%94%E5%91%98%E4%BC%9A.png","act":["office","organize"],"e":"p"},{"f":"img/sc/sc_literacy_new_1.jpg","d":"用速成识字法教人认字","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1952-03_1952%E5%B9%B4_%E7%A5%81%E5%BB%BA%E5%8D%8E%E5%92%8C%E9%80%9F%E6%88%90%E8%AF%86%E5%AD%97%E6%B3%95.png","act":["study"],"e":"p"},{"f":"img/sc/sc_street_new_1.jpg","d":"1952年的上海南京路","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:195202_1952%E5%B9%B4%E7%9A%84%E4%B8%8A%E6%B5%B7%E5%8D%97%E4%BA%AC%E8%B7%AF.png","act":["gossip"],"e":"p"},{"f":"img/sc/sc_coop_new_1.jpg","d":"河北邢台县供销合作社","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:195202_1952%E5%B9%B4%E6%B2%B3%E5%8C%97%E9%82%A2%E5%8F%B0%E5%8E%BF%E4%BE%9B%E9%94%80%E5%90%88%E4%BD%9C%E7%A4%BE.png","act":["earn"],"e":"p"},{"f":"img/sc/sc_mill_new_1.jpg","d":"上海第二棉纺织厂的女工","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1952-12_%E4%B8%8A%E6%B5%B7%E7%AC%AC%E4%BA%8C%E6%A3%89%E7%BA%BA%E7%BB%87%E5%8E%82.png","act":["work"],"e":"p"},{"f":"img/sc/sc_harvest_new_1.jpg","d":"河南黄泛区国营农场收割小麦","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1952-07_%E6%B2%B3%E5%8D%97%E5%9B%BD%E8%90%A5%E9%BB%84%E6%B3%9B%E5%8C%BA%E5%86%9C%E5%9C%BA%E6%94%B6%E5%89%B2%E5%B0%8F%E9%BA%A6.png","act":["work"],"e":"p"},{"f":"img/sc/sc_meeting_new_1.jpg","d":"上海店员五反运动代表会议","y":"1952","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1952-03_1952%E5%B9%B4_%E4%B8%8A%E6%B5%B7%E5%B8%82%E5%BA%97%E5%91%98%E4%BA%94%E5%8F%8D%E8%BF%90%E5%8A%A8%E4%BB%A3%E8%A1%A8%E4%BC%9A%E8%AE%AE.png","act":["office","organize"],"e":"p"},{"f":"img/sc/sc_cpv_new_1.jpg","d":"朝鲜战场上的中国人民志愿军战士","y":"1950","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:195103_1950%E5%B9%B4%E6%9C%9D%E9%B2%9C%E6%88%98%E4%BA%89%E4%B8%AD%E5%9B%BD%E5%BF%97%E6%84%BF%E5%86%9B%E5%A3%AB%E5%85%B5.png","act":["drill"],"e":"p"},{"f":"img/sc/sc_mine_new_1.jpg","d":"京西煤矿掘进队","y":"1962","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1962-05_1962%E5%B9%B4_%E4%BA%AC%E8%A5%BF%E7%85%A4%E7%9F%BF%E6%8E%98%E8%BF%9B%E9%98%9F.jpg","act":["work"],"e":"p"},{"f":"img/sc/sc_fair_new_1.jpg","d":"北京厂甸庙会","y":"1963","a":"《人民画报》1963年4月","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1963-04_1963%E5%B9%B4_%E5%8E%82%E7%94%B8%E5%BA%99%E4%BC%9A.jpg","act":["rest","gossip"],"e":"p"},{"f":"img/sc/sc_election_new_1.jpg","d":"北京市基层普选投票","y":"1963","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1963-06_1963%E5%B9%B4_%E5%8C%97%E4%BA%AC%E5%B8%82%E5%9F%BA%E5%B1%82%E6%99%AE%E9%80%89.jpg","act":["office"],"e":"p"},{"f":"img/sc/sc_shop_new_1.jpg","d":"百货大楼糖果柜台的售货员张秉贵","y":"1963","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1963-06_1963%E5%B9%B4_%E5%8C%97%E4%BA%AC_%E5%BC%A0%E7%A7%89%E8%B4%B5.jpg","act":["earn"],"e":"p"},{"f":"img/sc/sc_tractor_new_1.jpg","d":"建明人民公社的拖拉机在耕地","y":"1963","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1963-01_1963%E5%B9%B4_%E5%BB%BA%E6%98%8E%E4%BA%BA%E6%B0%91%E5%85%AC%E7%A4%BE%E6%8B%96%E6%8B%89%E6%9C%BA.jpg","act":["work"],"e":"p"},{"f":"img/sc/sc_navy_new_1.jpg","d":"解放军海军士兵","y":"1963","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1963-01_1963%E5%B9%B4_%E4%B8%AD%E5%9B%BD%E4%BA%BA%E6%B0%91%E8%A7%A3%E6%94%BE%E5%86%9B%E6%B5%B7%E5%86%9B%E5%A3%AB%E5%85%B5.jpg","act":["drill"],"e":"p"},{"f":"img/sc/sc_youth_new_1.jpg","d":"知识青年来到河北昌黎农场","y":"1964","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1964-07_1964%E5%B9%B4_%E7%9F%A5%E8%AF%86%E9%9D%92%E5%B9%B4%E6%9D%A5%E5%88%B0%E6%B2%B3%E5%8C%97%E6%98%8C%E9%BB%8E%E5%86%9C%E5%9C%BA.jpg","act":["work","organize"],"e":"p"},{"f":"img/sc/sc_tricycle_new_1.jpg","d":"上海交通民警给三轮车工人送水","y":"1964","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1964-09_1964%E5%B9%B4_%E4%B8%8A%E6%B5%B7%E4%BA%A4%E9%80%9A%E6%B0%91%E8%AD%A6%E4%B8%BB%E5%8A%A8%E7%BB%99%E4%B8%89%E8%BD%AE%E8%BD%A6%E5%B7%A5%E4%BA%BA%E9%80%81%E6%B0%B4.jpg","act":["work"],"e":"p"},{"f":"img/sc/sc_nightschool_new_1.jpg","d":"上海业余大学的学员","y":"1964","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1964-11_1964%E5%B9%B4_%E4%B8%8A%E6%B5%B7%E5%B8%82%E4%B8%9A%E4%BD%99%E5%A4%A7%E5%AD%A6.jpg","act":["study"],"e":"p"},{"f":"img/sc/sc_militia_new_1.jpg","d":"持枪的女民兵","y":"1965","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1965-6_1965%E5%B9%B4_%E5%A5%B3%E6%B0%91%E5%85%B5.jpg","act":["drill"],"e":"p"},{"f":"img/sc/sc_snack_new_1.jpg","d":"北京隆福寺小吃店","y":"1965","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1965-5_1965%E5%B9%B4_%E9%9A%86%E7%A6%8F%E5%AF%BA%E5%B0%8F%E5%90%83%E5%BA%97.jpg","act":["rest"],"e":"p"},{"f":"img/sc/sc_shipyard_new_1.jpg","d":"江南造船厂的电焊工","y":"1965","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1965-11_1965_%E6%B1%9F%E5%8D%97%E9%80%A0%E8%88%B9%E5%8E%82_%E7%84%8A%E6%8E%A5.jpg","act":["work"],"e":"p"},{"f":"img/sc/sc_study_new_1.jpg","d":"群众学习毛泽东著作","y":"1966","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1967-02_1966%E5%B9%B4%E6%B0%91%E4%BC%97%E5%AD%A6%E4%B9%A0%E6%AF%9B%E6%B3%BD%E4%B8%9C%E9%80%89%E9%9B%86.jpg","act":["study","organize"],"e":"p"},{"f":"img/sc/sc_station_new_1.jpg","d":"上海火车站","y":"1967","a":"《人民画报》","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1967-04_1967%E5%B9%B4%E4%B8%8A%E6%B5%B7%E7%81%AB%E8%BD%A6%E7%AB%99.jpg","act":["earn"],"e":"p"},{"f":"img/sc/sc_dazibao_new_1.jpg","d":"北京大学的大字报","y":"1967","a":"人民画报","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1967-11_1967%E5%B9%B4_%E5%8C%97%E4%BA%AC%E5%A4%A7%E5%AD%A6%E5%A4%A7%E5%AD%97%E6%8A%A5.jpg","act":["organize"],"e":"p"},{"f":"img/sc/sc_canteen_new_1.jpg","d":"人民公社公共食堂","y":"1959","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:People%27s_commune_canteen2.jpg","act":["rest"],"e":"p"},{"f":"img/sc/sc_oil_new_1.jpg","d":"大庆油田第一列油罐列车驶出","y":"1960-06-01","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:First_train_of_oil_in_Daqing.jpg","act":["work"],"e":"p"},{"f":"img/sc/sc_revparty_qing_1.jpg","d":"南洋同盟会成员合影（汪精卫、陈璧君等）","y":"1907","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Members_of_the_Nanyang_Tongmenghui.jpg","act":["organize","befriend"],"e":"q"},{"f":"img/sc/sc_revparty_qing_2.jpg","d":"华兴会主要领导人在东京合影","y":"1905","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:%E5%8D%8E%E5%85%B4%E4%BC%9A%E4%B8%BB%E8%A6%81%E9%A2%86%E5%AF%BC%E4%BA%BA.jpg","act":["organize","befriend"],"e":"q"},{"f":"img/sc/sc_bazaar_war_1.jpg","d":"昆明街头集市，摊贩与赶集人群","y":"1944–1945","a":"Allen Larsen（飞虎队队员）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:China_from_the_Eyes_of_the_Flying_Tigers_1944-1945_45.jpg","act":["gossip","earn"],"e":"w"},{"f":"img/sc/sc_street_war_1.jpg","d":"重庆码头附近拥挤的街道","y":"1945","a":"William L. Dibble（飞虎队队员）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:China_from_the_Eyes_of_the_Flying_Tigers_1944-1945_55.jpg","act":["gossip","earn"],"e":"w"},{"f":"img/sc/sc_poster_war_1.jpg","d":"昆明市民驻足观看街头彩色宣传画","y":"1944–1945","a":"Allen Larsen（飞虎队队员）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:China_from_the_Eyes_of_the_Flying_Tigers_1944-1945_11.jpg","act":["gossip"],"e":"w"},{"f":"img/sc/sc_panicbuy_war_1.jpg","d":"金圆券改革后物价暗涨，上海市民挤着抢购布匹","y":"1948","a":"《中美周报》第308期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1948%E5%B9%B4%E4%B8%8A%E6%B5%B7%E5%B8%82%E6%B0%91%E6%8A%A2%E8%B4%AD%E5%B8%83%E5%8C%B9.jpg","act":["earn","disaster"],"e":"w"},{"f":"img/sc/sc_blackmarket_war_1.jpg","d":"上海黑市交易现场，人群围着柜台买卖","y":"1948","a":"《中美周报》第304期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1948%E5%B9%B4%E4%B8%8A%E6%B5%B7%E9%BB%91%E5%B8%82%E4%BA%A4%E6%98%93%E5%AF%A6%E5%9C%B0%E6%94%9D%E5%BD%B1.png","act":["earn","gossip"],"e":"w"},{"f":"img/sc/sc_family_war_1.jpg","d":"母亲带着两个孩子挤在简陋住处的床铺边","y":"1946","a":"Arthur Rothstein（联合国善后救济总署摄）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Arthur_Rothstein_-_Chinese_mother_with_children_ppmsca.07798.jpg","act":["rest","disaster"],"e":"w"},{"f":"img/sc/sc_ricedole_war_1.jpg","d":"饥荒中乡间发放救济米，饥民排队领粮","y":"1946","a":"Arthur Rothstein（联合国善后救济总署摄）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Arthur_Rothstein_-_Rice_distribution_during_Chinese_famine_ppmsca.07586.jpg","act":["disaster","office"],"e":"w"},{"f":"img/sc/sc_aid_war_1.jpg","d":"街头工人从卡车上卸下成袋的援华粮食","y":"1948","a":"佚名（美国经济合作总署，NARA 藏）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Photograph_of_Food_Aid_being_Unloaded_from_a_Truck_in_China_-_NARA_-_5900042.jpg","act":["disaster","work"],"e":"w"},{"f":"img/sc/sc_neighbors_new_1.jpg","d":"上海里弄居民围坐一堂，听民警通报、七嘴八舌提意见","y":"1964","a":"《人民画报》1964年第9期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1964-09_1964%E5%B9%B4_%E9%87%91%E9%99%B5%E4%B8%9C%E8%B7%AF%E6%B4%BE%E5%87%BA%E6%89%80%E7%9A%84%E6%B0%91%E8%AD%A6.jpg","act":["befriend","gossip"],"e":"p"},{"f":"img/sc/sc_workmates_new_1.jpg","d":"上海第一钢厂工人下班在冷气休息室里说笑歇脚","y":"1962","a":"《人民画报》1962年第6期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1962-06_1962%E5%B9%B4_%E4%B8%8A%E6%B5%B7%E7%AC%AC%E4%B8%80%E9%92%A2%E5%8E%82%E8%AE%BE%E7%BD%AE%E5%86%B7%E6%B0%94%E4%BC%91%E6%81%AF%E5%AE%A4.jpg","act":["befriend","rest"],"e":"p"},{"f":"img/sc/sc_flood_rep_1.jpg","d":"1931年大水中的汉口街市，居民撑船涉水","y":"1931","a":"佚名（瑞典行道会档案）","l":"CC0","s":"https://commons.wikimedia.org/wiki/File:0964.a.0730.tif","act":["disaster"],"e":"r"},{"f":"img/sc/sc_flood_rep_2.jpg","d":"长江水灾灾民聚集等候红十字会救济","y":"1931-08","a":"佚名（德国联邦档案馆藏）","l":"CC BY-SA 3.0 de","s":"https://commons.wikimedia.org/wiki/File:Bundesarchiv_Bild_102-12231,_China,_%C3%9Cberschwemmungsopfer.jpg","act":["disaster","office"],"e":"r","u":"https://creativecommons.org/licenses/by-sa/3.0/de/deed.en","m":"已缩放、压缩"},{"f":"img/sc/sc_flood_rep_3.jpg","d":"长江水灾难民翻检冲上岸的家当","y":"1931-09","a":"佚名（德国联邦档案馆藏）","l":"CC BY-SA 3.0 de","s":"https://commons.wikimedia.org/wiki/File:Bundesarchiv_Bild_102-12269,_China,_Hochwasserkatastrophe.jpg","act":["disaster"],"e":"r","u":"https://creativecommons.org/licenses/by-sa/3.0/de/deed.en","m":"已缩放、压缩"},{"f":"img/sc/sc_council_qing_1.jpg","d":"总理衙门大臣三人于衙署庭院合影","y":"约1871–1872","a":"John Thomson","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:MEMBERS_OF_THE_TSUNGLI_YAMEN,_PEKING.jpg","act":["office","petition"],"e":"q"},{"f":"img/sc/sc_council_qing_2.jpg","d":"资政院首次开院礼，全体议员合影","y":"1910-10-03","a":"佚名","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:Zizhengyuan.jpg","act":["office","petition"],"e":"q"},{"f":"img/sc/sc_council_rep_1.jpg","d":"民国第一届国会众议院第二会期开会，议员在议院前合影","y":"1916","a":"众议院秘书厅（《众议院要览》1919）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:%E6%B0%91%E5%9C%8B%E4%BA%94%E5%B9%B4%E7%AC%AC%E4%B8%80%E5%B1%86%E7%9C%BE%E8%AD%B0%E9%99%A2%E7%AC%AC%E4%BA%8C%E6%9C%83%E6%9C%9F%E9%96%8B%E6%9C%83%E6%94%9D%E5%BD%B1.jpg","act":["office","petition"],"e":"r"},{"f":"img/sc/sc_council_war_1.jpg","d":"南京第一届国民大会开幕，代表满座","y":"1948","a":"《第一届国民大会专辑》（东方出版社 1948）","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:%E5%9C%8B%E6%B0%91%E5%A4%A7%E6%9C%83%E9%96%8B%E5%B9%95%E5%87%BA%E5%B8%AD%E4%B9%8B%E4%BB%A3%E8%A1%A8%E7%9B%9B%E6%B3%81.jpg","act":["office","petition"],"e":"w"},{"f":"img/sc/sc_council_new_1.jpg","d":"人民大会堂里召开第二届全国人大第三次会议","y":"1962","a":"《人民画报》1962年第5期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1962-05_1962%E5%B9%B4_%E7%AC%AC%E4%BA%8C%E5%B1%8A%E5%85%A8%E5%9B%BD%E4%BA%BA%E5%A4%A7%E7%AC%AC%E4%B8%89%E6%AC%A1%E4%BC%9A%E8%AE%AE.jpg","act":["office","petition"],"e":"p"},{"f":"img/sc/sc_council_new_2.jpg","d":"第三届全国人大第一次会议主席台","y":"1964–1965","a":"《人民画报》1965年第2期","l":"公有领域","s":"https://commons.wikimedia.org/wiki/File:1965-02_1965_%E7%AC%AC%E4%B8%89%E5%B1%8A%E5%85%A8%E5%9B%BD%E4%BA%BA%E5%A4%A7%E7%AC%AC%E4%B8%80%E6%AC%A1%E4%BC%9A%E8%AE%AE.jpg","act":["office","petition"],"e":"p"},{"f":"img/ai/act_gift_qing_1.jpg","d":"晚清厅堂：仆从捧礼盒躬身呈上，主人端坐受礼，客人拱手立于一旁。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gift"],"e":"q"},{"f":"img/ai/act_gift_rep_1.jpg","d":"民国石库门弄堂：长衫礼帽客提点心匣登门，老主人摆手推辞。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gift"],"e":"r"},{"f":"img/ai/act_gift_rep_1.jpg","d":"民国石库门弄堂：长衫礼帽客提点心匣登门，老主人摆手推辞。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gift"],"e":"w"},{"f":"img/ai/act_gift_new_1.jpg","d":"新中国：干部服青年提网兜苹果和罐头上门探望长辈。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gift"],"e":"p"},{"f":"img/ai/act_request_qing_1.jpg","d":"晚清官宅：读书人拱手躬身请托，老官员坐太师椅上神色审慎。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["request"],"e":"q"},{"f":"img/ai/act_request_rep_1.jpg","d":"民国书房：年轻人把一封信推过书桌，戴圆眼镜的长者不动声色。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["request"],"e":"r"},{"f":"img/ai/act_request_rep_1.jpg","d":"民国书房：年轻人把一封信推过书桌，戴圆眼镜的长者不动声色。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["request"],"e":"w"},{"f":"img/ai/act_request_new_1.jpg","d":"新中国机关办公室：农民攥着帽子向干部说情，干部执笔倾听。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["request"],"e":"p"},{"f":"img/ai/act_loan_qing_1.jpg","d":"晚清钱庄：伙计拨算盘、银锭在侧，柜台外的穷汉等着借银。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["loan"],"e":"q"},{"f":"img/ai/act_loan_rep_1.jpg","d":"民国当铺：妇人踮脚把棉袍递上高柜台，朝奉俯身打量。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["loan"],"e":"r"},{"f":"img/ai/act_loan_rep_1.jpg","d":"民国当铺：妇人踮脚把棉袍递上高柜台，朝奉俯身打量。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["loan"],"e":"w"},{"f":"img/ai/act_loan_new_1.jpg","d":"新中国农村信用社：女会计把贷款与借据交给戴帽的老社员。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["loan"],"e":"p"},{"f":"img/ai/act_debt_qing_1.jpg","d":"晚清年关：债主拿账本上门讨债，户主躬身告饶，妻子倚门而望。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"q"},{"f":"img/ai/act_debt_rep_1.jpg","d":"民国夜里：两个短打汉子堵在门口，屋里人摊开空手。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"r"},{"f":"img/ai/act_debt_rep_1.jpg","d":"民国夜里：两个短打汉子堵在门口，屋里人摊开空手。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"w"},{"f":"img/ai/act_visit_qing_1.jpg","d":"晚清府邸门前：访客向老门房递上名帖，轿子候在一旁。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["visit"],"e":"q"},{"mo":[6,7,8],"f":"img/ai/act_visit_new_1.jpg","d":"新中国大杂院夏夜：街坊坐小板凳摇蒲扇聊天、剥豆子。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["visit"],"e":"p"},{"f":"img/ai/act_befriend_qing_1.jpg","d":"晚清茶馆：商人与青年隔桌举杯，盖碗瓜子，相谈结交。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["befriend"],"e":"q"},{"f":"img/ai/act_befriend_rep_1.jpg","d":"民国饭馆雅间：长衫、西装、中山装几人圆桌举杯。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["befriend"],"e":"r"},{"f":"img/ai/act_befriend_rep_1.jpg","d":"民国饭馆雅间：长衫、西装、中山装几人圆桌举杯。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["befriend"],"e":"w"},{"f":"img/ai/act_gossip_rep_1.jpg","d":"民国茶馆角落：戴礼帽的人凑近低语，抽旱烟的老者侧目提防。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gossip"],"e":"r"},{"f":"img/ai/act_gossip_rep_1.jpg","d":"民国茶馆角落：戴礼帽的人凑近低语，抽旱烟的老者侧目提防。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gossip"],"e":"w"},{"f":"img/ai/act_accounts_qing_1.jpg","d":"晚清夜里：油灯下独自拨算盘对账，桌上几串铜钱。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"q"},{"f":"img/ai/act_accounts_new_1.jpg","d":"新中国夜里：夫妻在灯泡下清点钞票和粮票，精打细算。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"p"},{"f":"img/ai/act_study_qing_1.jpg","d":"晚清夜读：书生在豆油灯下读线装书，笔砚在旁。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["study"],"e":"q"},{"f":"img/ai/act_study_rep_1.jpg","d":"民国学生宿舍：上下铺与蚊帐间，学生在台灯下伏案苦读。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["study"],"e":"r"},{"f":"img/ai/act_study_rep_1.jpg","d":"民国学生宿舍：上下铺与蚊帐间，学生在台灯下伏案苦读。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["study"],"e":"w"},{"f":"img/ai/act_study_new_1.jpg","d":"新中国农村夜校：一男一女在煤油灯下写字读课本。","y":"新中国 1949–1972","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["study"],"e":"p"},{"f":"img/ai/act_wait_qing_1.jpg","d":"晚清雨日：一人独坐窗前看雨落屋瓦，茶已凉。","y":"晚清 1840–1911","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["wait"],"e":"q"},{"mo":[9,10,11,12],"f":"img/ai/act_wait_rep_1.jpg","d":"民国深秋小院：老人坐竹椅抱茶壶，落叶满地，静待时日。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["wait"],"e":"r"},{"mo":[9,10,11,12],"f":"img/ai/act_wait_rep_1.jpg","d":"民国深秋小院：老人坐竹椅抱茶壶，落叶满地，静待时日。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["wait"],"e":"w"},{"f":"img/ai/act_rest_rep_1.jpg","d":"战时农家土炕：头缠绷带的伤员卧床，老妇端来一碗汤药。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["rest"],"e":"r"},{"f":"img/ai/act_rest_rep_1.jpg","d":"战时农家土炕：头缠绷带的伤员卧床，老妇端来一碗汤药。","y":"民国（含抗战与内战）1912–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["rest"],"e":"w"},{"f":"img/ai/act_gossip_war_1.jpg","d":"抗战陪都茶馆：茶客围桌低声议论时局，堂倌提长嘴铜壶续水。","y":"抗战 1937–1945","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["gossip"],"e":"w"},{"f":"img/ai/act_debt_war_1.jpg","d":"1948 年金圆券贬值，市民涌到银行铁门前挤兑，警察拦阻。","y":"内战 1946–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["debt"],"e":"w"},{"f":"img/ai/act_disaster_war_1.jpg","d":"内战末期火车站台：难民扛着包袱挑担，有人爬上车厢顶。","y":"内战 1946–1949","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["disaster"],"e":"w"},{"f":"img/ai/act_disaster_rep_1.jpg","d":"1920 年华北大旱：饥民端碗排队领粥，老人靠土墙坐着。","y":"民国 1920–1921","a":"AI 生成","l":"示意图，非史料","ai":1,"act":["disaster"],"e":"r"}];
+
+var SC_MAP={
+ 'gov:work':'work','gov:earn':'earn','gov:organize':'organize','gov:gossip':'gossip','gov:office':'office','gov:memorial':'office','gov:appoint':'office',
+ 'gov:treasury':'office','gov:drill':'drill','gov:mobilize':'drill','gov:study':'study','gov:rest':'rest','gov:befriend':'befriend','gov:lobby':'befriend',
+ 'gov:petition':'petition','gov:inspect':'inspect','gov:tour':'inspect',
+ 'net:visit':'visit','meet:visit':'visit','sup:visit':'visit','net:gift':'gift','sup:gift':'gift','rel:gift':'gift',
+ 'net:favor':'request','net:intro':'request','net:plead':'request','sup:ask':'request','promote':'request',
+ 'net:loan':'loan','pw:loan':'loan','net:repay':'debt','meet:learn':'study','meet:work':'work','rel:talk':'befriend',
+ 'club:act':'organize','club:arm':'organize','fac:organize':'organize','unit:drill':'drill','unit:rec':'drill','wait':'wait'
+};
+var SC_RECENT=[];
+function scEra(ord){ return ord<calOrd(1912,1,1)?'q':(ord<calOrd(1937,7,7)?'r':(ord<calOrd(1949,10,1)?'w':'p')); }
+function scCat(key){
+ key=String(key||''); if(SC_MAP[key]) return SC_MAP[key];
+ var p=key.split(':'); if(p.length>=2&&SC_MAP[p[0]+':'+p[1]]) return SC_MAP[p[0]+':'+p[1]];
+ return null;
+}
+function scRand(){ return Math.random(); }
+function scPickFrom(pool,n){
+ var fresh=pool.filter(function(x){ return SC_RECENT.indexOf(x.f)<0&&!PH.bad[x.f]; });
+ if(fresh.length<n) fresh=pool.filter(function(x){ return !PH.bad[x.f]; });
+ var a=fresh.slice(), out=[];
+ while(a.length&&out.length<n){ out.push(a.splice(Math.floor(scRand()*a.length),1)[0]); }
+ return out;
+}
+/* 选图：同类同年代的真实照片优先；不够两张时用同类 AI 示意补；都没有就六成概率配一张同年代的市井实景 */
+function scenePick(key,ord){
+ var cat=scCat(key), e=scEra(ord), mo=calFromOrd(ord).m, out=[];
+ if(cat){
+  var real=SCENES.filter(function(x){ return !x.ai&&x.e===e&&x.act.indexOf(cat)>=0; });
+  var ai=SCENES.filter(function(x){ return x.ai&&x.e===e&&x.act.indexOf(cat)>=0&&(!x.mo||x.mo.indexOf(mo)>=0); });   /* 画面有季节的只在相应月份用 */
+  out=scPickFrom(real,2);
+  if(out.length<2) out=out.concat(scPickFrom(ai,2-out.length));
+ }
+ if(!out.length&&scRand()<0.6){
+  out=scPickFrom(SCENES.filter(function(x){ return !x.ai&&x.e===e&&/work|earn|gossip/.test(x.act.join(',')); }),1);
+ }
+ out.forEach(function(x){ SC_RECENT.push(x.f); });
+ while(SC_RECENT.length>16) SC_RECENT.shift();
+ return out;
+}
+window.__SCENE={
+ data:SCENES, era:scEra, cat:scCat, pick:scenePick,
+ show:function(key,title){ if(!s) return false; var l=scenePick(key,s.cal.ord); if(!l.length) return false; return phMount(l,title); }
+};
+/* AI 示意图：说明里不给来源链接，写明“AI 生成示意，非史料照片”；图上角标同样写明 */
+var _phCapHTMLV4191=phCapHTML;
+phCapHTML=function(p){
+ if(!p||!p.ai) return _phCapHTMLV4191.apply(this,arguments);
+ return '<span class="ph-d">'+phEsc(p.d)+'</span><span class="ph-m"><span class="ph-i">'+phEsc(p.y)+'</span><span class="ph-sep"> · </span><span class="ph-i ph-aitag">AI 生成示意，非史料照片</span></span>';
+};
+var _phGoV4191=phGo;
+phGo=function(i,instant){
+ _phGoV4191.apply(this,arguments);
+ try{
+  var E=PH.els; if(!E) return; var p=PH.list[PH.i];
+  var b=E.frame.querySelector('.ph-aibadge');
+  if(p&&p.ai){ if(!b){ b=document.createElement('span'); b.className='ph-aibadge'; b.textContent='AI 生成示意'; E.frame.appendChild(b); } b.hidden=false; }
+  else if(b) b.hidden=true;
+ }catch(e){}
+};
+
+/* ================= V4.19.2：左右滑动切换分页 =================
+   在主界面横向滑动（手指跟随、带阻尼），越过阈值或快速一甩就切到相邻分页；新分页的卡片从对应方向滑入。
+   弹窗、照片轮播、输入框、可横向滚动的区域里不触发；屏幕最左右边缘 24px 留给系统返回手势。 */
+(function(){
+ var G=null, st=null;
+ function tabsVis(){ var n=document.getElementById('tabs'); if(!n) return []; return [].slice.call(n.querySelectorAll('button[data-tab]')).filter(function(b){ return b.offsetParent!==null&&!b.disabled; }); }
+ function curIdx(l){ for(var i=0;i<l.length;i++) if(l[i].classList.contains('on')) return i; return 0; }
+ function blocked(el){
+  for(var e=el;e&&e!==document.body;e=e.parentElement){
+   if(e.id==='mask'||e.id==='tabs'||e.id==='hud') return true;
+   if(e.matches&&e.matches('input,select,textarea,.ph-frame,[data-noswipe]')) return true;
+   if(e.scrollWidth>e.clientWidth+4){ var ox=getComputedStyle(e).overflowX; if(ox==='auto'||ox==='scroll') return true; }
+  }
+  return false;
+ }
+ function dirAnim(dir){
+  var g=document.getElementById('game'); if(!g||phReduced()) return;
+  g.classList.remove('tab-from-l','tab-from-r'); try{ void g.offsetWidth; }catch(e){}
+  g.classList.add(dir>0?'tab-from-r':'tab-from-l');
+  clearTimeout(dirAnim.t); dirAnim.t=setTimeout(function(){ g.classList.remove('tab-from-l','tab-from-r'); },320);
+ }
+ function go(dir){
+  var l=tabsVis(); if(l.length<2) return false;
+  var i=curIdx(l), j=i+dir; if(j<0||j>=l.length) return false;
+  l[j].click();
+  try{ l[j].scrollIntoView({block:'nearest',inline:'nearest'}); }catch(e){}
+  return true;
+ }
+ window.__SWIPE={go:go,tabs:function(){ return tabsVis().map(function(b){ return b.getAttribute('data-tab'); }); }};
+ /* 点按标签也按方向滑入：在捕获阶段记下切换方向 */
+ document.addEventListener('click',function(e){
+  var b=e.target&&e.target.closest?e.target.closest('#tabs button[data-tab]'):null; if(!b) return;
+  var l=tabsVis(), i=curIdx(l), j=l.indexOf(b); if(j<0||j===i) return;
+  dirAnim(j>i?1:-1);
+ },true);
+ function inner(){ G=document.getElementById('game'); return G&&G.querySelector('.main'); }
+ function setX(el,x,anim){ if(!el) return; el.style.transition=anim?'transform var(--dur-2) var(--ease-out)':'none'; el.style.transform=x?'translate3d('+x+'px,0,0)':''; }
+ document.addEventListener('touchstart',function(e){
+  st=null;
+  if(e.touches.length!==1) return;
+  var g=document.getElementById('game'); if(!g||g.classList.contains('hidden')) return;
+  var m=document.getElementById('mask'); if(m&&!m.classList.contains('hidden')) return;
+  var t=e.touches[0], w=window.innerWidth||390;
+  if(t.clientX<24||t.clientX>w-24) return;
+  if(!g.contains(e.target)||blocked(e.target)) return;
+  st={x:t.clientX,y:t.clientY,t:Date.now(),dx:0,h:null,el:inner(),w:w};
+ },{passive:true});
+ document.addEventListener('touchmove',function(e){
+  if(!st) return; var t=e.touches[0]; var dx=t.clientX-st.x, dy=t.clientY-st.y;
+  if(st.h===null){ if(Math.abs(dx)<10&&Math.abs(dy)<10) return; st.h=Math.abs(dx)>Math.abs(dy)*1.4; if(!st.h){ st=null; return; } }
+  st.dx=dx;
+  var l=tabsVis(), i=curIdx(l), edge=(dx>0&&i===0)||(dx<0&&i===l.length-1);
+  if(!phReduced()){ setX(st.el, Math.round(dx*(edge?0.12:0.35)), false); if(!edge&&window.__INDDRAG) window.__INDDRAG(dx); }
+ },{passive:true});
+ function end(){
+  if(!st) return; var s0=st; st=null;
+  if(!s0.h){ return; }
+  var v=Math.abs(s0.dx)/Math.max(1,Date.now()-s0.t), dir=s0.dx<0?1:-1;
+  var hit=Math.abs(s0.dx)>Math.max(60,s0.w*0.2)||(v>0.45&&Math.abs(s0.dx)>32);
+  if(window.__INDDRAG) window.__INDDRAG(0);
+  if(hit&&go(dir)){ setX(s0.el,0,false); }
+  else setX(s0.el,0,true);
+  setTimeout(function(){ if(s0.el){ s0.el.style.transition=''; } },320);
+ }
+ document.addEventListener('touchend',end,{passive:true});
+ document.addEventListener('touchcancel',end,{passive:true});
+})();
+
+/* ================= V4.19.2：顺滑度 =================
+   ① 标签下的朱砂指示条滑到当前分页；左右拖动时跟着手指走一段。
+   ② 每个分页记住自己的滚动位置，切回来时回到原处。
+   ③ 银钱变动时数字从旧值滚到新值，并短暂标出增减。 */
+(function(){
+ var SCROLL={}, lastTab=null;
+ function nav(){ return document.getElementById('tabs'); }
+ function ind(drag){
+  var n=nav(); if(!n||n.style.display==='none') return;
+  var b=n.querySelector('button.on'); if(!b) return;
+  var r=b.getBoundingClientRect(), nr=n.getBoundingClientRect();
+  var x=r.left-nr.left+n.scrollLeft+(drag||0);
+  n.style.setProperty('--ind-x',Math.round(x)+'px'); n.style.setProperty('--ind-w',Math.round(r.width)+'px');
+  n.classList.add('has-ind');
+ }
+ window.__IND=ind;
+ document.addEventListener('click',function(e){
+  var b=e.target&&e.target.closest?e.target.closest('#tabs button[data-tab]'):null; if(!b) return;
+  var n=nav(), old=n&&n.querySelector('button.on'); var ot=old&&old.getAttribute('data-tab'), nt=b.getAttribute('data-tab');
+  if(ot) SCROLL[ot]=window.scrollY||0;
+  setTimeout(function(){
+   ind();
+   if(nt!==ot){ var y=SCROLL[nt]||0; try{ window.scrollTo({top:y,behavior:'instant'}); }catch(er){ window.scrollTo(0,y); } }
+  },0);
+ },true);
+ window.addEventListener('resize',function(){ ind(); });
+ /* 拖动时指示条跟随：由滑动模块报告位移 */
+ window.__INDDRAG=function(dx){
+  var n=nav(); if(!n) return; var b=n.querySelector('button.on'); if(!b) return;
+  n.classList.toggle('ind-drag',!!dx);
+  ind(dx?-dx*(b.getBoundingClientRect().width/(window.innerWidth||390)):0);
+ };
+ /* 银钱滚动 */
+ var cashShown=null, raf=null;
+ function cashTick(){
+  var x=window.__S&&window.__S(); var el=document.getElementById('hudCash'); if(!x||!el) return;
+  var v=+x.cash||0;
+  if(cashShown===null||phReduced()){ cashShown=v; return; }
+  if(Math.abs(v-cashShown)<0.005) return;
+  var from=cashShown, to=v, t0=performance.now(), d=420; cashShown=v;
+  el.classList.remove('up','down'); try{ void el.offsetWidth; }catch(e){} el.classList.add(to>from?'up':'down');
+  clearTimeout(cashTick.t); cashTick.t=setTimeout(function(){ el.classList.remove('up','down'); },900);
+  if(raf) cancelAnimationFrame(raf);
+  (function step(now){
+   var k=Math.min(1,(now-t0)/d), e=1-Math.pow(1-k,3);
+   el.textContent=M(from+(to-from)*e);
+   if(k<1) raf=requestAnimationFrame(step); else { raf=null; el.textContent=M(to); }
+  })(t0);
+ }
+ var _rIND=window.__RENDER;
+ setInterval(function(){
+  try{
+   var n=nav(); if(n&&n.style.display!=='none'&&!n.classList.contains('ind-drag')){ var b=n.querySelector('button.on'); var tab=b&&b.getAttribute('data-tab'); if(tab!==lastTab){ lastTab=tab; ind(); } }
+   if(!raf) cashTick();
+  }catch(e){}
+ },120);
+ window.__CASHTICK=cashTick;
+})();
+
+/* ================= V4.20.1：分页重排 · 图片为主 =================
+   ① 八个分页：身世、行事、钱粮、人脉、时局、天下、军政、档案；一页只讲一件事。
+   ② 每页顶部一张真实历史照片作页首（按年代与身份挑选），标题与一句话摘要压在照片上。
+   ③ 行事按钮做成照片卡；亲历事件做成横向影像条。
+   ④ 长说明默认收成两行，点开再看；晋升之路只显示上一级、本级、下一级；账簿明细收起。
+   ⑤ 中国形势图重做：放大、海陆分色、外国占领用斜线、省名加衬底、标出你的所在与前线，可全屏拖看。 */
+(function(){
+ var PG={gov:{n:'身世',k:'壹'},act:{n:'行事',k:'贰'},money:{n:'钱粮',k:'叁'},ppl:{n:'人脉',k:'肆'},pol:{n:'时局',k:'伍'},world:{n:'天下',k:'陆'},mil:{n:'军政',k:'柒'},arc:{n:'档案',k:'捌'}};
+ var ORDER=['gov','act','money','ppl','pol','world','mil','arc'];
+ var MAPT={'晋升之路':'gov','身体':'gov','结局':'gov','组织与结社':'act','派系':'act','生计账簿':'money',
+  '关系网':'ppl','历史人物':'ppl','同期人物':'ppl','人际':'ppl','麾下人才':'ppl',
+  '时代纪事':'pol','国势':'pol','制度运转':'pol','派系与权力格局':'pol','动态世界局势':'pol','年度报纸':'pol','近事日志':'pol',
+  '列国局势':'world','列强':'world','国力对比':'world','中国形势图':'world',
+  '军情':'mil','兵力 / 粮草':'mil','战事':'mil','战事图':'mil','内乱':'mil','个人编年史':'arc','存档':'arc'};
+ window.__tabCat=function(card,title){
+  if(!card) return 'all'; var id=card.id||'';
+  if(card.querySelector('#hName')) return 'gov';
+  if(card.querySelector('#actTitle')) return 'act';
+  if(id==='cardLive') return 'money';
+  if(id==='cardUnit'||id==='cardMilInfo'||id==='cardWar'||id==='cardRebel'||card.getAttribute('data-role')==='own') return 'mil';
+  if(id==='cardNet'||card.querySelector('#peopleBox')) return 'ppl';
+  if(id==='cardIntl'||id==='cardPowers'||id==='cardCompare'||card.querySelector('#chinaMap')) return 'world';
+  if(card.querySelector('#slotSel')||card.querySelector('#logs')) return 'arc';
+  if(card.querySelector('#curEvent')) return 'pol';
+  return MAPT[title]||'arc';
+ };
+ /* 分页按钮 */
+ function buildNav(){
+  var nav=document.getElementById('tabs'); if(!nav||nav.dataset.v4201) return;
+  nav.dataset.v4201='1';
+  var on=(nav.querySelector('button.on')||{}).getAttribute?nav.querySelector('button.on').getAttribute('data-tab'):'gov';
+  if(!PG[on]) on='gov';
+  nav.innerHTML=ORDER.map(function(k){ return '<button type="button" data-tab="'+k+'"'+(k===on?' class="on"':'')+'>'+PG[k].n+'</button>'; }).join('');
+ }
+ buildNav();
+ function curTab(){ var b=document.querySelector('#tabs button.on'); return b?b.getAttribute('data-tab'):'gov'; }
+
+ /* ---------- 照片挑选 ---------- */
+ function eraOf(y){ return y<1912?'q':y<1937?'r':y<1950?'w':'p'; }
+ var ERA_IMG={q:['era_qing','era_qing_city','ziqiang_2'],r:['era_republic','minguo'],w:['era_war','era_war_2','wuhan_3'],p:['era_newchina','transformation56','plan53','era_newchina']};
+ /* 天下页：取当年已发生的最近一件对外大事的照片，不提前用后来的照片 */
+ var WORLD_SEQ=[['opium',1840],['nanjing42',1842],['secondopium56',1857],['ziqiang_2',1866],['sinoFrench84',1884],['jiawu',1894],['boxer_2',1900],['boxer01',1901],['minguo',1912],['may4',1919],['918',1931],['q7',1937],['wuhan_3',1938],['era_war_2',1940],['1945',1945],['campaign48_2',1949],['korean50',1950],['transformation56',1955],['un71',1971]];
+ function worldPhoto(y){ var b=null; WORLD_SEQ.forEach(function(x){ if(x[1]<=y&&PHOTOS[x[0]]) b=PHOTOS[x[0]]; }); return b; }
+ var ARC_IMG={q:['sc_study_qing_1','sc_family_qing_1'],r:['sc_street_rep_1','sc_teahouse_rep_1'],w:['sc_wedding_war_1','sc_street_rep_2'],p:['sc_street_new_1','sc_fair_new_1']};
+ var SCI={}; (SCENES||[]).forEach(function(x){ if(x.ai) return; var id=x.f.replace(/^.*\//,'').replace(/\.jpg$/,''); SCI[id]=x; });
+ function hsh(t){ var h=7; for(var i=0;i<t.length;i++) h=(h*31+t.charCodeAt(i))>>>0; return h; }
+ function byKey(k){ return PHOTOS[k]||SCI[k]||null; }
+ function pickList(list,seed){ var a=list.map(byKey).filter(Boolean); return a.length?a[hsh(seed)%a.length]:null; }
+ function scenesFor(acts,e){
+  var a=(SCENES||[]).filter(function(x){ return !x.ai&&x.e===e&&x.act&&x.act.some(function(t){ return acts.indexOf(t)>=0; }); });
+  if(!a.length) a=(SCENES||[]).filter(function(x){ return !x.ai&&x.act&&x.act.some(function(t){ return acts.indexOf(t)>=0; }); });
+  return a;
+ }
+ function roleActs(){
+  if(s.isThrone||s.isLeader) return ['office'];
+  return {official:['office'],officer:['drill'],soldier:['drill'],merchant:['earn'],student:['study'],activist:['organize'],revolutionary:['organize']}[s.role]||['office'];
+ }
+ function lastEventPhoto(){
+  if(!s||!s.evDone) return null; var best=null;
+  EVENTS.forEach(function(ev){ if(!s.evDone[ev.id]) return; var l=phList(ev.id); if(!l.length) return; var d=evDateOf(ev), o=calOrd(ev.y,d[0],d[1]); if(!best||o>best.o) best={o:o,p:l[0],ev:ev}; });
+  return best&&(s.cal.ord-best.o)<365*3?best:null;
+ }
+ function heroPhoto(tab){
+  var y=s.year, e=eraOf(y), seed=tab+':'+Math.floor(y/4)+':'+(s.name||'');
+  if(tab==='gov') return pickList(e==='p'&&y<1957?['founding49','campaign48_2']:ERA_IMG[e],seed);
+  if(tab==='world') return worldPhoto(y)||pickList(ERA_IMG[e],seed);
+  if(tab==='arc') return pickList(ARC_IMG[e],seed)||pickList(ERA_IMG[e],seed);
+  if(tab==='pol'){ var le=lastEventPhoto(); return le?le.p:pickList(ERA_IMG[e],seed+'p'); }
+  var acts=tab==='act'?roleActs():tab==='money'?['earn']:tab==='ppl'?['befriend','visit','gossip']:tab==='mil'?['drill']:['office'];
+  var l=scenesFor(acts,e); return l.length?l[hsh(seed)%l.length]:pickList(ERA_IMG[e],seed);
+ }
+ /* ---------- 每页摘要 ---------- */
+ function txt(id){ var e=document.getElementById(id); return e?e.textContent.trim():''; }
+ function cut(t,n){ t=String(t||'').replace(/\s+/g,' '); return t.length>n?t.slice(0,n-1)+'…':t; }
+ function summary(tab){
+  try{
+   var age=s.age!=null?s.age:(s.year-s.birth);
+   if(tab==='gov') return [s.name||'—',[rankTitleOf()||'',age+' 岁',s.region||''].filter(Boolean).join(' · ')];
+   if(tab==='act'){ var n=[].slice.call(document.querySelectorAll('#game .act')).filter(function(b){ return !b.disabled; }).length; var j=(s.jobs||[]).length; return ['行事','可做 '+n+' 件事'+(j?' · 在办 '+j+' 项':'')]; }
+   if(tab==='money'){ var it=econItems(s), net=sumItems(it.pay)-sumItems(it.cost); return ['钱粮','现银 '+M(s.cash||0)+' · 每月'+(net>=0?'结余 ':'亏空 ')+M(Math.abs(net))]; }
+   if(tab==='ppl') return ['人脉','关系网 '+Object.keys(s.net||{}).length+' 人'+(supName&&supName()?' · 上级 '+supName():'')];
+   if(tab==='pol'){ var le=lastEventPhoto(); return ['时局',le?le.ev.y+' · '+le.ev.t:cut(txt('curEvent'),30)]; }
+   if(tab==='world'){ var w=(window.__WAR&&window.__WAR.active())||[]; return ['天下',w.length?'战事 '+w.length+' 场 · '+w.map(function(x){ return intlName(x.A[0])+'对'+intlName(x.B[0]); }).join('，'):'列国 '+(window.__INTL?window.__INTL.keys.length:6)+' · 暂无战事']; }
+   if(tab==='mil'){ var wl=((window.__WAR&&window.__WAR.active())||[]).length; if(!(s.isLeader||s.isThrone||isMil())) return ['军情',wl?'战事 '+wl+' 场在打':'各方兵力与战事']; var u=document.querySelector('#cardUnit h2'); var ut=u?u.textContent.trim():''; return ['军政',(ut.length>1?ut:'所部')+(s.troops?' · 兵 '+fmtMen(s.troops):'')]; }
+   if(tab==='arc') return ['档案','生于 '+s.birth+' 年 · 入世 '+Math.max(0,s.year-(s.startYear||s.year))+' 年'];
+  }catch(e){}
+  return [PG[tab].n,''];
+ }
+ /* ---------- 页首照片 ---------- */
+ var hero=null, heroSig='';
+ function ensureHero(){
+  var g=document.getElementById('game'); if(!g) return null;
+  if(!hero){
+   hero=document.createElement('div'); hero.id='pgHero'; hero.className='pg-hero';
+   hero.innerHTML='<div class="pg-imgs"></div><div class="pg-shade"></div><div class="pg-txt"><span class="pg-k"></span><h1 class="pg-t"></h1><p class="pg-s"></p></div><p class="pg-cap"></p>';
+  }
+  if(hero.parentNode!==g||g.firstElementChild!==hero) g.insertBefore(hero,g.firstChild);
+  return hero;
+ }
+ function setHero(){
+  if(!s||!document.getElementById('game')||document.getElementById('game').classList.contains('hidden')) return;
+  var h=ensureHero(); if(!h) return;
+  var tab=curTab(); if(!PG[tab]) tab='gov';
+  document.body.setAttribute('data-pg',tab);
+  var p=heroPhoto(tab), sm=summary(tab);
+  var sig=tab+'|'+(p?p.f:'')+'|'+sm.join('|');
+  if(sig===heroSig) return; heroSig=sig;
+  var tb=document.querySelector('#tabs button[data-tab="'+tab+'"]'); h.querySelector('.pg-k').textContent=PG[tab].k+' · '+(tb?tb.textContent:PG[tab].n);
+  h.querySelector('.pg-t').textContent=sm[0];
+  h.querySelector('.pg-s').textContent=sm[1];
+  h.querySelector('.pg-cap').textContent=p?cut((p.c||p.d||''),26)+' · '+(p.y||'')+(p.a?' · '+cut(p.a,18):''):'';
+  var box=h.querySelector('.pg-imgs'), last=box.lastElementChild;
+  if(p&&(!last||last.getAttribute('data-f')!==p.f)){
+   var im=document.createElement('div'); im.className='pg-img'; im.setAttribute('data-f',p.f);
+   im.style.backgroundImage='url("'+p.f+'")'; im.style.backgroundPosition=p.p||'50% 40%';
+   box.appendChild(im);
+   requestAnimationFrame(function(){ im.classList.add('on'); });
+   setTimeout(function(){ while(box.children.length>1) box.removeChild(box.firstElementChild); },700);
+  }
+ }
+ /* 视差：页首照片随滚动轻移 */
+ var pq=0;
+ window.addEventListener('scroll',function(){
+  if(pq||phReduced()) return; pq=requestAnimationFrame(function(){ pq=0; if(!hero) return; var y=window.scrollY||0; if(y>500) return; var b=hero.querySelector('.pg-imgs'); if(b) b.style.transform='translate3d(0,'+(y*0.28).toFixed(1)+'px,0) scale(1.04)'; });
+ },{passive:true});
+
+ /* ---------- 行事照片卡 ---------- */
+ function decorateActs(){
+  var e=eraOf(s.year);
+  [].slice.call(document.querySelectorAll('#game .act[data-act]')).forEach(function(b,i){
+   var a=b.getAttribute('data-act'), key=e+':'+a;
+   if(b.getAttribute('data-phk')===key) return;
+   var l=scenesFor([a],e); if(!l.length) l=scenesFor([{train:'drill',politics:'organize',govern:'office',network:'befriend',gift:'befriend',buy:'drill',fund:'office'}[a]||a],e);
+   b.setAttribute('data-phk',key);
+   if(!l.length){ b.classList.remove('act-ph'); return; }
+   var p=l[hsh(a+Math.floor(s.year/6))%l.length];
+   b.classList.add('act-ph'); b.style.setProperty('--ph','url("'+p.f+'")');
+   b.setAttribute('aria-label',(b.querySelector('b')||{}).textContent||a);
+  });
+ }
+ /* ---------- 亲历影像条 ---------- */
+ function decorateGallery(){
+  [].slice.call(document.querySelectorAll('#evGallery .evg-row')).forEach(function(r){
+   if(r.getAttribute('data-ph')) return; var l=phList(r.getAttribute('data-ev')); if(!l.length) return;
+   r.setAttribute('data-ph','1'); r.style.setProperty('--ph','url("'+l[0].f+'")');
+  });
+ }
+ /* ---------- 此时此地：时代纪事里的年代影像 ---------- */
+ function eraStrip(){
+  var ce=document.getElementById('curEvent'); if(!ce) return; var card=ce.closest('.card'); if(!card) return;
+  var box=card.querySelector('.era-strip');
+  if(!box){ box=document.createElement('div'); box.className='era-strip'; box.setAttribute('data-noswipe','1'); var g=document.getElementById('evGallery'); card.insertBefore(box,g||null); }
+  var e=eraOf(s.year), l=scenesFor(['gossip','earn','work','rest'],e).filter(function(x){ return x.e===e; });
+  var k=Math.floor(s.year/2), pick=[]; for(var i=0;i<l.length&&pick.length<4;i++){ var x=l[(hsh('es'+k)+i*7)%l.length]; if(pick.indexOf(x)<0) pick.push(x); }
+  var sig=e+k+pick.length; if(box.getAttribute('data-sig')===sig) return; box.setAttribute('data-sig',sig);
+  box.innerHTML='<h3>此时此地</h3><div class="es-row">'+pick.map(function(x){ return '<figure class="es-it" style="--ph:url(\''+x.f+'\')"><figcaption>'+phEsc(x.d)+'<span>'+phEsc(x.y)+'</span></figcaption></figure>'; }).join('')+'</div>';
+ }
+ /* ---------- 渐进展开 ---------- */
+ var OPEN={};
+ function clampText(){
+  [].slice.call(document.querySelectorAll('#game .card:not(.tabhide) .small.muted')).forEach(function(p){
+   if(p.closest('.ladder')||p.closest('.act')||p.closest('#pgHero')) return;
+   var t=p.textContent; if(t.length<48){ p.classList.remove('clamp'); return; }
+   var k=hsh(t); if(OPEN[k]){ p.classList.remove('clamp'); return; }
+   if(!p.classList.contains('clamp')){ p.classList.add('clamp'); p.setAttribute('data-k',k); }
+  });
+ }
+ document.addEventListener('click',function(e){
+  var p=e.target.closest&&e.target.closest('.small.muted.clamp'); if(!p) return;
+  OPEN[p.getAttribute('data-k')]=1; p.classList.remove('clamp');
+ });
+ function discToggles(){
+  var lb=document.getElementById('ladderBox'), lc=lb&&lb.closest('.card');
+  if(lc&&!lc.querySelector('.disc-t')){
+   lc.classList.add('disc'); var t=document.createElement('button'); t.type='button'; t.className='disc-t'; t.textContent='展开全部官阶';
+   t.onclick=function(){ var o=lc.classList.toggle('disc-open'); t.textContent=o?'只看相邻官阶':'展开全部官阶'; };
+   lb.parentNode.insertBefore(t,lb.nextSibling);
+  }
+  if(lc){ var d=lc.querySelector('.ladder-dots'); if(!d){ d=document.createElement('div'); d.className='ladder-dots'; lb.parentNode.insertBefore(d,lb); }
+   try{ var L=FAC[s.faction].ladder, h=''; for(var i=0;i<L.length;i++) h+='<i class="'+(i<s.rank?'past':i===s.rank?'now':'')+'" title="'+L[i]+'"></i>'; if(d.innerHTML!==h) d.innerHTML=h; }catch(er){} }
+  var lv=document.getElementById('cardLive');
+  if(lv&&!lv.querySelector('.disc-t')){
+   lv.classList.add('disc'); var t2=document.createElement('button'); t2.type='button'; t2.className='disc-t'; t2.textContent='收支明细';
+   t2.onclick=function(){ var o=lv.classList.toggle('disc-open'); t2.textContent=o?'收起明细':'收支明细'; };
+   lv.appendChild(t2);
+  }
+ }
+ /* ---------- 军政标签随身份改名 ---------- */
+ function milLabel(){ var b=document.querySelector('#tabs button[data-tab="mil"]'); if(!b) return; var n=(s.isLeader||s.isThrone||isMil())?'军政':'军情'; if(b.textContent!==n) b.textContent=n; }
+
+ /* ---------- 中国形势图 ---------- */
+ var FOREIGN={japan:1,russia:1,britain:1,france:1,usa:1,germany:1,dutch:1};
+ function mapDefs(svg){
+  if(svg.querySelector('#mapDefs')) return;
+  var NS='http://www.w3.org/2000/svg', defs=document.createElementNS(NS,'defs'); defs.id='mapDefs';
+  var h='';
+  Object.keys(FOREIGN).forEach(function(k){ var c=CTRL_COLOR[k]||'#777';
+   h+='<pattern id="hatch-'+k+'" width="5" height="5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="5" height="5" fill="'+c+'" fill-opacity=".38"/><rect width="2.2" height="5" fill="'+c+'"/></pattern>'; });
+  defs.innerHTML=h; svg.insertBefore(defs,svg.firstChild);
+  var sea=document.createElementNS(NS,'rect'); sea.id='mapSea'; sea.setAttribute('x','-200'); sea.setAttribute('y','-200'); sea.setAttribute('width','1200'); sea.setAttribute('height','900');
+  svg.insertBefore(sea,defs.nextSibling);
+  var ov=document.createElementNS(NS,'g'); ov.id='mapOverlay'; svg.appendChild(ov);
+ }
+ function mapDecorate(){
+  var svg=document.getElementById('chinaMap'); if(!svg||!mapFeatures) return;
+  mapDefs(svg);
+  var layer=document.getElementById('regionLayer'); if(!layer) return;
+  var gs=layer.querySelectorAll('g.region'), ownAt={};
+  for(var i=0;i<gs.length;i++){
+   var f=mapFeatures[i]; if(!f) continue; var p=gs[i].querySelector('path'); if(!p) continue;
+   var ctrl=featCtrl(f);
+   gs[i].setAttribute('data-ctrl',ctrl); gs[i].setAttribute('data-name',f.disp||f.name); if(!ownAt[f.name]||f.pri) ownAt[f.name]=f; if(f.alias) f.alias.forEach(function(a){ if(!ownAt[a]) ownAt[a]=f; });
+   if(FOREIGN[ctrl]){ if(p.getAttribute('fill')!=='url(#hatch-'+ctrl+')') p.setAttribute('fill','url(#hatch-'+ctrl+')'); }
+   gs[i].classList.toggle('mine',ctrl===s.faction);
+   /* 省名放到省内（原数据没有中心点，名字都挤在左上角） */
+   if(f._lx===undefined){ try{ var bb=p.getBBox(); if(bb.width>0){ var pts=[],sx=0,sy=0;
+     if(p.isPointInFill){ for(var gx=1;gx<12;gx++) for(var gy=1;gy<12;gy++){ var X=bb.x+bb.width*gx/12, Y=bb.y+bb.height*gy/12, pt=svg.createSVGPoint(); pt.x=X; pt.y=Y; if(p.isPointInFill(pt)){ pts.push([X,Y]); sx+=X; sy+=Y; } } }
+     var lx=bb.x+bb.width/2, ly=bb.y+bb.height/2;
+     if(pts.length){ var mx=sx/pts.length, my=sy/pts.length, bd=1e9; pts.forEach(function(q){ var d=(q[0]-mx)*(q[0]-mx)+(q[1]-my)*(q[1]-my); if(d<bd){ bd=d; lx=q[0]; ly=q[1]; } }); }
+     f._lx=lx; f._ly=ly; f._area=bb.width*bb.height; } }catch(er){} }
+   if(f._lx!==undefined){ f.cx=f._lx; f.cy=f._ly; var tx=gs[i].querySelector('text'); if(tx){ if(tx.getAttribute('x')!=String(f._lx)){ tx.setAttribute('x',f._lx); tx.setAttribute('y',f._ly+3); } tx.style.display=f._area<180?'none':''; } }
+  }
+  /* 你的所在与前线 */
+  var ov=document.getElementById('mapOverlay'), h='';
+  var home=ownAt[REGION_PROV[s.region]||''];
+  var fronts={}; ((window.__WAR&&window.__WAR.active())||[]).forEach(function(w){ var en=w.A.indexOf('cn')>=0?w.B[0]:(w.B.indexOf('cn')>=0?w.A[0]:null); if(!en) return; (WAR_FRONT_PROV[en]||[]).forEach(function(n){ fronts[n]=1; }); });
+  Object.keys(fronts).forEach(function(n){ var f=ownAt[n]; if(!f) return; h+='<path class="mf-front" d="'+f.path+'"/>'; });
+  if(home) h+='<g class="mf-home" transform="translate('+home.cx+','+home.cy+')"><circle class="mf-ring" r="9"/><circle class="mf-dot" r="3.2"/><text class="mf-lab" y="-12">你在此</text></g>';
+  if(ov.innerHTML!==h) ov.innerHTML=h;
+  /* 图例：只列地图上现有的，附省数 */
+  var cnt={}; for(var j=0;j<gs.length;j++){ var c=gs[j].getAttribute('data-ctrl'); cnt[c]=(cnt[c]||0)+1; }
+  var lg=Object.keys(cnt).sort(function(a,b){ return cnt[b]-cnt[a]; }).map(function(k){
+   var sw=FOREIGN[k]?'<i class="dot hatch" style="--c:'+CTRL_COLOR[k]+'"></i>':'<i class="dot" style="background:'+CTRL_COLOR[k]+'"></i>';
+   return '<span class="lg'+(k===s.faction?' me':'')+'">'+sw+(CTRL_NAME[k]||k)+'<em>'+cnt[k]+'</em></span>'; }).join('');
+  if(Object.keys(fronts).length) lg+='<span class="lg"><i class="dot front"></i>前线</span>';
+  var le=document.getElementById('legend'); if(le&&le.innerHTML!==lg) le.innerHTML=lg;
+  /* 全屏查看按钮 */
+  var wrap=svg.closest('.mapwrap');
+  if(wrap&&!wrap.querySelector('.map-full-b')){
+   var b=document.createElement('button'); b.type='button'; b.className='map-full-b'; b.textContent='放大查看';
+   b.onclick=function(ev){ ev.stopPropagation(); var c=wrap.closest('.card'); var o=!c.classList.contains('map-full'); c.classList.toggle('map-full',o); document.body.classList.toggle('map-open',o); b.textContent=o?'收起':'放大查看';
+    var sc=wrap.querySelector('.map-scroll'); if(o&&sc){ setTimeout(function(){ sc.scrollLeft=(sc.scrollWidth-sc.clientWidth)/2; sc.scrollTop=(sc.scrollHeight-sc.clientHeight)/2; },30); } setTimeout(applyView,40); };
+   wrap.appendChild(b);
+  }
+  if(wrap&&!wrap.querySelector('.map-scroll')){ var sc=document.createElement('div'); sc.className='map-scroll'; wrap.insertBefore(sc,svg); sc.appendChild(svg); }
+ }
+ /* 视野收紧到中国本部，使地图更大 */
+ initMapPan=function(){
+  var l=document.getElementById('regionLayer');
+  try{ var b=l&&l.getBBox&&l.getBBox(); if(b&&b.width>100){ VIEW={x:b.x-6,y:b.y-6,w:b.width+12,h:b.height+12}; } else VIEW={x:40,y:30,w:580,h:360}; }catch(e){ VIEW={x:40,y:30,w:580,h:360}; }
+  applyView();
+ };
+ var mapTight=0;
+ var _rmV4201=renderMap;
+ renderMap=function(){ _rmV4201(); mapTight=0; try{ mapDecorate(); }catch(e){} };
+
+ /* ---------- 轮询 ---------- */
+ function tick(){
+  if(!s) return;
+  try{ buildNav(); milLabel(); setHero(); decorateActs(); decorateGallery(); eraStrip(); discToggles(); clampText(); mapDecorate();
+   if(curTab()==='world'&&!mapTight){ var l=document.getElementById('regionLayer'); if(l&&l.querySelector('path')){ var b=l.getBBox(); if(b.width>100){ mapTight=1; initMapPan(); } } }
+  }catch(e){}
+ }
+ document.addEventListener('click',function(e){ if(e.target.closest&&e.target.closest('#tabs button[data-tab]')){ var mf=document.querySelector('.card.map-full'); if(mf){ mf.classList.remove('map-full'); document.body.classList.remove('map-open'); var mb=mf.querySelector('.map-full-b'); if(mb) mb.textContent='放大查看'; } setTimeout(tick,0); setTimeout(tick,80); } });
+ setInterval(tick,600); setTimeout(tick,800);
+ window.__UI4201={tick:tick,hero:function(){ return hero; },pages:ORDER,photo:function(t){ var p=heroPhoto(t); return p&&p.f; }};
+})();
+
+/* ================= V4.20.2：人脉、钱粮、档案也以图为主 =================
+   人脉：史实人物用真实肖像，其余人物用姓氏朱印；钱粮：收支画成两条比例条；档案：亲历大事影像条 + 时间轴。 */
+(function(){
+ var PORTRAIT={"丁宝桢":{"f":"img/pt/pt_00.jpg","d":"丁宝桢 像","l":"公有领域","a":"Unknown author"},"严复":{"f":"img/pt/pt_01.jpg","d":"严复 像","l":"公有领域","a":"Unknown author"},"何应钦":{"f":"img/pt/pt_02.jpg","d":"何应钦 像","l":"公有领域","a":"Unknown author"},"傅作义":{"f":"img/pt/pt_03.jpg","d":"傅作义 像","l":"公有领域","a":"Unknown author"},"光绪帝":{"f":"img/pt/pt_04.jpg","d":"光绪帝 像","l":"公有领域","a":"Qing Dynasty Court Painter"},"冯国璋":{"f":"img/pt/pt_05.jpg","d":"冯国璋 像","l":"公有领域","a":"Unknown author"},"冯玉祥":{"f":"img/pt/pt_06.jpg","d":"冯玉祥 像","l":"公有领域","a":"Unknown author"},"冰心":{"f":"img/pt/pt_07.jpg","d":"冰心 像","l":"公有领域","a":"Unknown author"},"刘少奇":{"f":"img/pt/pt_08.jpg","d":"刘少奇 像","l":"公有领域","a":"unknown author"},"刘永福":{"f":"img/pt/pt_09.jpg","d":"刘永福 像","l":"公有领域","a":"遠藤誠編"},"刘铭传":{"f":"img/pt/pt_10.jpg","d":"刘铭传 像","l":"公有领域","a":"Unknown author"},"吴佩孚":{"f":"img/pt/pt_11.jpg","d":"吴佩孚 像","l":"CC BY-SA 4.0","a":"Unknown author"},"吴大澂":{"f":"img/pt/pt_12.jpg","d":"吴大澂 像","l":"公有领域","a":"不詳"},"周恩来":{"f":"img/pt/pt_13.jpg","d":"周恩来 像","l":"公有领域","a":"President (1969-1974 : Nixon). White House Photo Office. 1969-1974; General Services Administration. National Archives and Records Service. Office of Presidential Libraries. Office of Presidential Papers. 1/20/1969-ca. 12/1974"},"咸丰帝":{"f":"img/pt/pt_14.jpg","d":"咸丰帝 像","l":"公有领域","a":"Qing Dynasty Court Painter"},"奕訢":{"f":"img/pt/pt_15.jpg","d":"奕訢 像","l":"公有领域","a":"John Thomson"},"孙中山":{"f":"img/pt/pt_16.jpg","d":"孙中山 像","l":"公有领域","a":"上海波尔照相馆"},"孙传芳":{"f":"img/pt/pt_17.jpg","d":"孙传芳 像","l":"公有领域","a":"Unknown author"},"孙家鼐":{"f":"img/pt/pt_18.jpg","d":"孙家鼐 像","l":"公有领域","a":"傅任敢编《中華教育界》1936–1937年（原摄影者不详）"},"宋子文":{"f":"img/pt/pt_19.jpg","d":"宋子文 像","l":"CC0","a":"Unknown author"},"岑春煊":{"f":"img/pt/pt_20.jpg","d":"岑春煊 像","l":"公有领域","a":"Unknown author"},"左宗棠":{"f":"img/pt/pt_21.jpg","d":"左宗棠 像","l":"公有领域","a":"Boiarskii, Adolf-Nikolay Erazmovich"},"巴金":{"f":"img/pt/pt_22.jpg","d":"巴金 像","l":"CC BY-SA 4.0","a":"Hans-Joachim Koch"},"庆亲王":{"f":"img/pt/pt_23.jpg","d":"庆亲王 像","l":"公有领域","a":"Unknown author"},"张之洞":{"f":"img/pt/pt_24.jpg","d":"张之洞 像","l":"公有领域","a":"Unknown author"},"张作霖":{"f":"img/pt/pt_25.jpg","d":"张作霖 像","l":"公有领域","a":"Unknown author"},"张謇":{"f":"img/pt/pt_26.jpg","d":"张謇 像","l":"公有领域","a":"Unknown author"},"彭德怀":{"f":"img/pt/pt_27.jpg","d":"彭德怀 像","l":"公有领域","a":"《新华社》记者 郑景康"},"慈禧":{"f":"img/pt/pt_28.jpg","d":"慈禧 像","l":"公有领域","a":"John Yu Shuinling"},"戴笠":{"f":"img/pt/pt_29.jpg","d":"戴笠 像","l":"公有领域","a":"Unknown author"},"曹锟":{"f":"img/pt/pt_30.jpg","d":"曹锟 像","l":"公有领域","a":"Unknown author"},"朱德":{"f":"img/pt/pt_31.jpg","d":"朱德 像","l":"公有领域","a":"《新华社》记者 齐观山"},"李大钊":{"f":"img/pt/pt_32.jpg","d":"李大钊 像","l":"公有领域","a":"Unknown author"},"李宗仁":{"f":"img/pt/pt_33.jpg","d":"李宗仁 像","l":"公有领域","a":"Unknown author"},"林则徐":{"f":"img/pt/pt_34.jpg","d":"林则徐 像","l":"公有领域","a":"Lam Qua"},"林彪":{"f":"img/pt/pt_35.jpg","d":"林彪 像","l":"公有领域","a":"unknown author"},"梁启超":{"f":"img/pt/pt_36.jpg","d":"梁启超 像","l":"公有领域","a":"Rowanwindwhistler"},"段祺瑞":{"f":"img/pt/pt_37.jpg","d":"段祺瑞 像","l":"公有领域","a":"Unknown photographer"},"毛泽东":{"f":"img/pt/pt_38.jpg","d":"毛泽东 像","l":"公有领域","a":"Chen Zhengqing (1917–1966)"},"汪精卫":{"f":"img/pt/pt_39.jpg","d":"汪精卫 像","l":"公有领域","a":"Unknown author"},"琦善":{"f":"img/pt/pt_40.jpg","d":"琦善 像","l":"公有领域","a":"Unknown author"},"白崇禧":{"f":"img/pt/pt_41.jpg","d":"白崇禧 像","l":"公有领域","a":"The original uploader was Peterpan at Chinese Wikipedia."},"秋瑾":{"f":"img/pt/pt_42.jpg","d":"秋瑾 像","l":"公有领域","a":"Unknown, photographed in Qing Dynasty china"},"翁同龢":{"f":"img/pt/pt_43.jpg","d":"翁同龢 像","l":"公有领域","a":"不详 (unknown)"},"胡适":{"f":"img/pt/pt_44.jpg","d":"胡适 像","l":"公有领域","a":"Unknown author"},"蒋介石":{"f":"img/pt/pt_45.jpg","d":"蒋介石 像","l":"Attribution","a":"Unknown photographer"},"蔡元培":{"f":"img/pt/pt_46.jpg","d":"蔡元培 像","l":"公有领域","a":"The Library of Congress"},"赵尔巽":{"f":"img/pt/pt_47.jpg","d":"赵尔巽 像","l":"公有领域","a":"Unknown author"},"载沣":{"f":"img/pt/pt_48.jpg","d":"载沣 像","l":"公有领域","a":"Unknown"},"道光帝":{"f":"img/pt/pt_49.jpg","d":"道光帝 像","l":"公有领域","a":"Annonymous Qing Dynasty Court Painter"},"邓小平":{"f":"img/pt/pt_50.jpg","d":"邓小平 像","l":"公有领域","a":"Unknown author"},"郭嵩焘":{"f":"img/pt/pt_51.jpg","d":"郭嵩焘 像","l":"公有领域","a":"Unknown author"},"郭沫若":{"f":"img/pt/pt_52.jpg","d":"郭沫若 像","l":"公有领域","a":"Unknown author"},"钱学森":{"f":"img/pt/pt_53.jpg","d":"钱学森 像","l":"公有领域","a":"Unknown author"},"阎锡山":{"f":"img/pt/pt_54.jpg","d":"阎锡山 像","l":"公有领域","a":"Unknown author"},"陈云":{"f":"img/pt/pt_55.jpg","d":"陈云 像","l":"公有领域","a":"Unknown author"},"陈宝箴":{"f":"img/pt/pt_56.jpg","d":"陈宝箴 像","l":"公有领域","a":"Unknown author"},"陈独秀":{"f":"img/pt/pt_57.jpg","d":"陈独秀 像","l":"公有领域","a":"Unknown author"},"陈立夫":{"f":"img/pt/pt_58.jpg","d":"陈立夫 像","l":"公有领域","a":"Unknown photographer"},"陈诚":{"f":"img/pt/pt_59.jpg","d":"陈诚 像","l":"公有领域","a":"Chan Cheng"},"鲁迅":{"f":"img/pt/pt_60.jpg","d":"鲁迅 像","l":"公有领域","a":"雪怀照相馆"},"龙云":{"f":"img/pt/pt_61.jpg","d":"龙云 像","l":"公有领域","a":"Unknown Author"},"康有为":"wuxu","蔡锷":"huguo15","袁世凯":"warlord16","张学良":"northeast28","李鸿章":"ziqiang_3","曾国藩":"taiping_2"};
+ function esc(t){ return String(t).replace(/[&<>"']/g,function(c){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]; }); }
+ function avatar(name){
+  var k=PORTRAIT[name], p=k&&(typeof k==='string'?PHOTOS[k]:k);
+  var i=document.createElement('i'); i.className='pav'+(p?' ph':''); i.setAttribute('aria-hidden','true');
+  if(p){ i.style.backgroundImage='url("'+p.f+'")'; i.style.backgroundPosition=p.p||'50% 25%'; i.title=p.d; }
+  else i.textContent=String(name||'').replace(/^(老|小|阿)/,'').charAt(0)||'?';
+  return i;
+ }
+ function decoWho(){
+  var box=document.getElementById('whoBox'); if(!box) return;
+  [].slice.call(box.querySelectorAll('[data-who]')).forEach(function(b){
+   if(b.classList.contains('who-card')) return;
+   var n=b.getAttribute('data-who'), sub=b.querySelector('span'); var f=sub?sub.textContent.replace(/^\s*·\s*/,''):'';
+   b.className='who-card'; b.innerHTML=''; var av=avatar(n); av.classList.add('lg'); b.appendChild(av);
+   var t=document.createElement('span'); t.className='who-t'; t.innerHTML='<b>'+esc(n)+'</b><em>'+esc(f)+'</em>'; b.appendChild(t);
+   if(b.parentNode&&!b.parentNode.classList.contains('who-grid')){ b.parentNode.className='who-grid'; b.parentNode.removeAttribute('style'); }
+  });
+  [].slice.call(box.querySelectorAll('div[style*="opacity"] > span.small')).forEach(function(sp){
+   if(sp.classList.contains('who-far')) return; var n=sp.textContent.trim();
+   sp.className='who-far'; sp.removeAttribute('style'); sp.textContent=''; sp.appendChild(avatar(n)); var t=document.createElement('b'); t.textContent=n; sp.appendChild(t);
+  });
+ }
+ function decoPeople(){
+  try{ decoWho(); }catch(e){}
+  [].slice.call(document.querySelectorAll('#peopleBox .person .phead > b:first-child')).forEach(function(b){
+   if(b.previousElementSibling&&b.previousElementSibling.classList.contains('pav')) return;
+   b.parentNode.insertBefore(avatar(b.textContent.trim()),b);
+  });
+  [].slice.call(document.querySelectorAll('#netBox .net-top > b.net-name')).forEach(function(b){
+   if(b.previousElementSibling&&b.previousElementSibling.classList.contains('pav')) return;
+   b.parentNode.insertBefore(avatar(b.getAttribute('data-np')||b.textContent.trim()),b);
+  });
+ }
+ /* 钱粮：比例条 */
+ var SEG=['var(--data)','oklch(0.62 0.07 150)','oklch(0.68 0.08 80)','oklch(0.6 0.05 250)','oklch(0.7 0.04 30)','oklch(0.55 0.03 80)'];
+ function bar(items,tot,max,cls){
+  var w=max>0?Math.max(2,tot/max*100):0;
+  return '<div class="lv-bar '+cls+'" style="width:'+w.toFixed(1)+'%">'+items.map(function(it,i){ var pw=tot>0?it[1]/tot*100:0; return '<i style="width:'+pw.toFixed(1)+'%;background:'+SEG[i%SEG.length]+'"></i>'; }).join('')+'</div>';
+ }
+ function legend(items){ return '<div class="lv-lg">'+items.slice(0,6).map(function(it,i){ return '<span><i style="background:'+SEG[i%SEG.length]+'"></i>'+esc(it[0])+'<em>'+M(it[1])+'</em></span>'; }).join('')+'</div>'; }
+ function decoLive(){
+  var box=document.getElementById('liveBox'); if(!box||!s) return;
+  var top=box.querySelector('.live-top'); if(!top) return;
+  var it; try{ it=econItems(s); }catch(e){ return; }
+  var pay=it.pay.filter(function(x){ return x[1]>0; }).sort(function(a,b){ return b[1]-a[1]; });
+  var cost=it.cost.filter(function(x){ return x[1]>0; }).sort(function(a,b){ return b[1]-a[1]; });
+  var tp=sumItems(pay), tc=sumItems(cost), mx=Math.max(tp,tc);
+  var h='<div class="lv-row"><span class="lv-k">进</span>'+bar(pay,tp,mx,'in')+'</div>'+legend(pay)+
+        '<div class="lv-row"><span class="lv-k">出</span>'+bar(cost,tc,mx,'out')+'</div>'+legend(cost);
+  var v=box.querySelector('.live-viz');
+  if(!v){ v=document.createElement('div'); v.className='live-viz'; top.parentNode.insertBefore(v,top.nextSibling); }
+  if(v.getAttribute('data-h')!==h){ v.innerHTML=h; v.setAttribute('data-h',h); }
+ }
+ /* 档案：亲历大事影像 */
+ function decoArc(){
+  var lg=document.getElementById('logs'); if(!lg||!s||!s.evDone) return;
+  var card=lg.closest('.card'); if(!card) return;
+  var list=[]; EVENTS.forEach(function(ev){ if(!s.evDone[ev.id]) return; var l=phList(ev.id); if(!l.length) return; var d=evDateOf(ev); list.push({o:calOrd(ev.y,d[0],d[1]),ev:ev,p:l[0]}); });
+  list.sort(function(a,b){ return b.o-a.o; });
+  var sig=list.map(function(x){ return x.ev.id; }).join(',');
+  var box=card.querySelector('.arc-strip');
+  if(!list.length){ if(box) box.remove(); return; }
+  if(!box){ box=document.createElement('div'); box.className='arc-strip'; box.setAttribute('data-noswipe','1'); card.insertBefore(box,lg); }
+  if(box.getAttribute('data-sig')===sig) return; box.setAttribute('data-sig',sig);
+  box.innerHTML='<h3>亲历 '+list.length+' 件大事</h3><div class="es-row">'+list.map(function(x){ return '<button type="button" class="es-it ar-it" data-ev="'+x.ev.id+'" style="--ph:url(\''+x.p.f+'\');background-position:'+(x.p.p||'50% 40%')+'"><span class="ar-y">'+x.ev.y+'</span><b>'+esc(x.ev.t)+'</b></button>'; }).join('')+'</div>';
+ }
+ document.addEventListener('click',function(e){
+  var b=e.target.closest&&e.target.closest('.ar-it[data-ev]'); if(!b) return;
+  try{ phView(b.getAttribute('data-ev')); }catch(er){}
+ });
+ var busy=0;
+ function all(){ if(busy||!s) return; busy=1; try{ decoPeople(); decoLive(); decoArc(); }catch(e){} busy=0; }
+ var mo=new MutationObserver(function(){ all(); });
+ function watch(){ ['peopleBox','netBox','liveBox','logs'].forEach(function(id){ var el=document.getElementById(id); if(el&&!el.__mo4202){ el.__mo4202=1; mo.observe(el,{childList:true}); } }); }
+ setInterval(function(){ watch(); all(); },700); setTimeout(function(){ watch(); all(); },900);
+ window.__UI4202={run:all,portraits:PORTRAIT};
+})();
+
 window.__V4185NET=1;
+/* V4.21 突发事件 */
+/* ================= V4.21 突发事件 =================
+   日子往前走时，每月判定一次（平均三到五个月一件；同月至多一件；距上一件至少 45 天；与历史大事同时到达时排在其后）。
+   事件按年代（晚清/民国/抗战与内战/新中国）、身份、地点与处境（缺钱、欠债、关系、年龄）筛选；选项可有条件，不满足时置灰并写明原因。
+   选择写入 s.surprise（log 记录、flags 伏笔、cool 冷却），伏笔会在几个月到几年后引出后续事件，
+   并长期影响：晋升（考绩被压、丁忧、右派）、行动可用性（避祸/通缉期间不能公开办事）、派系与结社好感、政治运动中的处境（pol）。
+   配图规则同行动结果：同年代真实老照片优先，不够才用 AI 示意图（图上与说明标“AI 生成示意，非史料照片”）。 */
+(function(){
+ var SUR_GAP=45, SUR_P=0.28;
+ /* 独立随机数：突发事件用自己的种子（存在 s.surprise.rs，随存档保存），不扰动其它系统的随机序列 */
+ var RAND_OVR=null;
+ function surRand(){
+  if(RAND_OVR) return RAND_OVR();
+  var S=s&&s.surprise; if(!S||typeof S.rs!=='number') return NATIVE_RAND();
+  var t=(S.rs=(S.rs+0x6D2B79F5)>>>0); t=Math.imul(t^(t>>>15),t|1); t^=t+Math.imul(t^(t>>>7),t|61);
+  return ((t^(t>>>14))>>>0)/4294967296;
+ }
+ var NATIVE_RAND=function(){ return 0.5; };
+ function iso(fn){ var mr=Math.random; NATIVE_RAND=mr; Math.random=surRand; try{ return fn(); }finally{ Math.random=mr; } }
+ function R(){ return Math.random(); }
+ function rint(a,b){ return Math.floor(a+R()*(b-a+1)); }
+ function one(a){ return a[Math.floor(R()*a.length)]; }
+ function surEnsure(x){
+  x=x||s; if(!x) return null;
+  var S=x.surprise;
+  if(!S||typeof S!=='object'||Array.isArray(S)) S=x.surprise={};
+  if(!Array.isArray(S.log)) S.log=[];
+  if(!S.flags||typeof S.flags!=='object') S.flags={};
+  if(!S.cool||typeof S.cool!=='object') S.cool={};
+  ['last','mk','hold','wanted','pol','cnt','par'].forEach(function(k){ if(typeof S[k]!=='number'||!isFinite(S[k])) S[k]=k==='last'?-99999:0; });
+  if(S.pend&&(typeof S.pend!=='object'||typeof S.pend.o!=='number')) S.pend=null;
+  if(S.pend===undefined) S.pend=null;
+  if(typeof S.label!=='string') S.label='';
+  if(typeof S.holdWhy!=='string') S.holdWhy='';
+  if(typeof S.wantWhy!=='string') S.wantWhy='';
+  if(typeof S.rs!=='number'||!isFinite(S.rs)) S.rs=((Date.now()%2147483647)^(((x.cal&&x.cal.ord)||0)*2654435761))>>>0;
+  return S;
+ }
+ function SS(){ return surEnsure(s); }
+ /* ---------- 情境 ---------- */
+ var OCC={'关外':[1931.75,1945.65],'直隶':[1937.6,1945.65],'江浙':[1937.9,1945.65],'两广':[1938.8,1945.65],'湘鄂':[1938.8,1945.65]};
+ function occupied(reg,yf){ var r=OCC[reg]; return !!(r&&yf>=r[0]&&yf<r[1]); }
+ function C(){
+  var S=SS(), o=s.cal.ord, t=calFromOrd(o), y=t.y, E=econEnsure(s);
+  var K=0.8; try{ K=Math.max(0.6,_r2(sumItems(liveCostItems(s)))); }catch(e){}
+  var su=null; try{ su=supOf(); }catch(e){}
+  var c={o:o,y:y,m:t.m,yf:y+(t.m-1)/12,e:scEra(o),age:y-(+s.birth||y-30),K:K,
+   role:s.role,fac:s.faction,rank:+s.rank||0,top:!!(s.isLeader||s.isThrone),
+   reg:s.region||'',org:s.origin||'',cash:+s.cash||0,debt:+E.debt||0,F:S.flags,S:S,
+   sup:supRel(),supT:su?(su.t||'上司'):'上司',supN:su?(su.n||''):'',club:s.clubJoined?s.club:'',
+   prc:false,pol:S.pol||0,fame:+s.fame||0,skill:+s.skill||0,trust:+s.trust||0};
+  try{ c.prc=o>=calOrd(1949,10,1)&&intlPRC(); }catch(e){ c.prc=o>=calOrd(1949,10,1); }
+  c.mil=c.role==='soldier'||c.role==='officer'; c.off=c.role==='official'; c.biz=c.role==='merchant';
+  c.stu=c.role==='student'; c.act=c.role==='activist'; c.lit=c.stu||c.act||c.org==='知识分子家庭'||c.skill>=45;
+  c.poor=c.cash<K*3; c.rich=c.cash>=K*30||c.org==='乡绅家庭'||c.org==='商人家庭'||c.org==='皇室家庭';
+  c.occ=occupied(c.reg,c.yf);
+  c.coin=c.e==='q'?'银子':'钱';
+  c.city={'江浙':'上海','直隶':'天津','两广':'广州','湘鄂':'汉口','四川':'重庆','关外':'奉天'}[c.reg]||'城里';
+  if(c.e==='p'&&c.reg==='关外') c.city='沈阳';
+  if(c.e==='p'&&c.reg==='直隶') c.city='天津';
+  return c;
+ }
+ function has(c,k,days){ var f=c.F[k]; return !!(f&&!f.done&&c.o-f.o>=(days||0)); }
+ function ever(c,k){ return !!c.F[k]; }
+ function amt(c,months,floor){ return _r2(Math.max(floor||0.2,c.K*months)); }
+ function need(cond,why){ return cond?'':why; }
+ function needCash(c,v){ return c.cash>=v?'':'银钱不足：需要 '+M(v)+'，手头只有 '+M(c.cash); }
+ /* ---------- 结果：数值、伏笔、长期影响 ---------- */
+ var CUR=null;
+ function line(t){ if(CUR) CUR.lines.push(t); }
+ function hp(){ return (typeof s.health==='number'&&isFinite(s.health))?s.health:100; }
+ function FX(o){
+  o=o||{}; var E=econEnsure(s);
+  if(o.cash){
+   var v=_r2(o.cash);
+   if(v>=0){ s.cash=_r2((+s.cash||0)+v); line('银钱 +'+M(v)); }
+   else{
+    var have=Math.max(0,+s.cash||0), pay=Math.min(have,-v), rest=_r2(-v-pay);
+    s.cash=_r2(have-pay); line('银钱 -'+M(pay));
+    if(rest>0.004&&o.debt!==false){ E.debt=_r2((+E.debt||0)+rest); line('不够的 '+M(rest)+' 记作欠债'); }
+   }
+  }
+  [['fame','声望'],['trust','上级信任'],['skill','能力'],['power','政治影响']].forEach(function(k){
+   var d=Math.round(+o[k[0]]||0); if(!d) return; var b=+s[k[0]]||0; s[k[0]]=clamp(b+d); var real=s[k[0]]-clamp(b); if(real) line(k[1]+' '+dSign(real));
+  });
+  if(o.health){ var h0=hp(), h1=clamp(h0+Math.round(o.health),0,100); s.health=h1; if(h1!==h0) line('健康 '+dSign(h1-h0)); }
+  if(o.sup){ var a=supRel(); s.supRel=clamp(a+o.sup); if(s.supRel!==a) line('与'+(C0.supT||'上司')+'关系 '+dSign(s.supRel-a)); }
+  if(o.club&&s.clubJoined){ var cr=+s.clubRel||50; s.clubRel=clamp(cr+o.club); line('与'+((CLUBS[s.club]||{}).name||'结社')+'关系 '+dSign(s.clubRel-cr)); }
+  if(o.pf){ var g=pfGroup(); if(g){ var sp=g.support; g.support=clamp(g.support+o.pf,0,100); g.loyalty=clamp(g.loyalty+Math.round(o.pf/2),0,100); if(g.support!==sp) line('「'+g.name+'」好感 '+dSign(g.support-sp)); } }
+  if(o.npc&&o.npc[0]){ netRelAdd(o.npc[0],o.npc[1],o.npc[2]||'突发事件'); line('与'+o.npc[0]+'关系 '+dSign(o.npc[1])); }
+  if(o.natl){ Object.keys(o.natl).forEach(function(k){ try{ gAdd(k,o.natl[k]); }catch(e){} }); }
+ }
+ var C0={};
+ function pfGroup(){ var p=s.internalPolitics; if(!p||!Array.isArray(p.factions)||!p.factions.length) return null; var id=p.aligned; for(var i=0;i<p.factions.length;i++) if(p.factions[i].id===id) return p.factions[i]; return p.factions[0]; }
+ function FLAG(k,t,extra){ var S=SS(); var f={o:s.cal.ord,t:t}; if(extra) Object.keys(extra).forEach(function(x){ f[x]=extra[x]; }); S.flags[k]=f; line('伏笔：'+t); return f; }
+ function DONE(k,t){ var S=SS(); if(S.flags[k]){ S.flags[k].done=s.cal.ord; if(t) S.flags[k].end=t; } }
+ function POL(d){ var S=SS(); S.pol=Math.max(-12,Math.min(12,(S.pol||0)+d)); }
+ function HOLD(days,why){ var S=SS(), u=s.cal.ord+days; if(u>S.hold){ S.hold=u; S.holdWhy=why; } line('晋升受阻：'+why+'，至 '+calFmtOrd(S.hold)); }
+ function UNHOLD(){ var S=SS(); if(S.hold>s.cal.ord){ S.hold=s.cal.ord; line('晋升不再受阻'); } }
+ function WANT(days,why){ var S=SS(), u=s.cal.ord+days; if(u>S.wanted){ S.wanted=u; S.wantWhy=why; } line(why+'：至 '+calFmtOrd(S.wanted)+' 前不能公开办事'); }
+ function UNWANT(){ var S=SS(); if(S.wanted>s.cal.ord){ S.wanted=s.cal.ord; line('不必再躲，可以公开办事了'); } }
+ function NPC(type,title){
+  var n=netUnique(); var T=NET_TYPES[type]||NET_TYPES.tongxiang;
+  netP(n,{t:title||one(T.t(s.year||1840)),lv:Math.max(0,Math.min(7,rint(T.lv[0],T.lv[1]))),can:T.can.slice(),kind:'contact',type:type,mem:[],last:s.cal.ord,since:s.cal.ord,owe:0,grudge:0});
+  if(s.rel[n]===undefined) s.rel[n]=50;
+  return n;
+ }
+ /* ---------- 事件表 ----------
+    e：年代（q 晚清 / r 民国 / w 抗战与内战 / p 新中国）；y：年份范围；when：身份、地点、处境；chain：后续事件所依的伏笔；
+    ph：配图类别（同行动结果配图）；pk：按年代可用的史料照片；rep：同一事件再次出现的最短间隔（天）；once：一生一次。 */
+ var L=[];
+ function EV(o){ L.push(o); return o; }
+ function notTop(c){ return !c.top; }
+
+ /* 1 路遇饥民 */
+ EV({id:'famine',t:'路遇饥民',e:['q','r','w'],pk:[['henan42',1942,1943],['henan42_2',1938,1939]],ph:'disaster',rep:1100,when:notTop,
+  d:function(c){ return c.e==='q'?'荒年。城门外挤满了从北边逃来的饥民，一个抱孩子的妇人跪在你面前，孩子已经哭不出声。'
+   :c.e==='r'?'旱灾连着兵灾，乡下逃来的饥民睡在街边屋檐下。一个半大孩子拉住你的衣角，说他爹娘饿死在路上了。'
+   :'逃难的人一拨接一拨。一个瘦得脱了形的汉子拦住你，说一家五口三天没吃东西，只求一口饭。'; },
+  opts:function(c){ var a=amt(c,0.4,0.2), b=amt(c,1.2,0.6); return [
+   {t:'施一锅粥',d:'花 '+M(a)+' 买米熬粥，分给门口的人。',need:needCash(c,a),run:function(){ FX({cash:-a,fame:1}); return '一锅粥转眼见底。后面还有人在排，你只能看着。'; }},
+   {t:'收留一家做帮工',d:'管他们吃住，先垫 '+M(b)+'。人多嘴多，日后难料。',need:needCash(c,b),run:function(){ var n=NPC('tongxiang','逃荒来的帮工'); FX({cash:-b,fame:2,npc:[n,20,'荒年收留了他一家']}); FLAG('sheltered','收留了逃荒的'+n+'一家',{n:n}); return n+'一家在后院柴房住下，男人挑水劈柴，女人缝补。'; }},
+   {t:'摸几个铜板打发走',d:'不多不少，求个心安。',run:function(){ FX({cash:-amt(c,0.05,0.02)}); return '他磕了个头走了。第二天街口又多了两具尸首，你没去看是不是他。'; }},
+   {t:'关门不理',d:'自家也难，管不了那么多。',run:function(){ FX({fame:-1}); return '你把门闩上了。邻居看在眼里，没说什么。'; }}
+  ]; }});
+ /* 2 后续：收留的人 */
+ EV({id:'sheltered_back',t:'当年收留的人',e:['q','r','w','p'],chain:'sheltered',w:6,when:function(c){ return has(c,'sheltered',120); },ph:'visit',
+  d:function(c){ var f=c.F.sheltered; c.good=R()<0.6; return c.good?(f.n+'半夜来敲门。他如今在码头上做了把头，听说有人打你家的主意，特地来报信。')
+   :('两个差役找上门来，说当年你收留的'+f.n+'是从营里逃出来的逃丁，又在乡下跟人结过仇，问你窝藏之罪。'); },
+  opts:function(c){ var f=c.F.sheltered, g=giftCost(Math.max(1,c.rank)); if(c.good) return [
+   {t:'连夜把细软转移',d:'信他一回。',run:function(){ DONE('sheltered','报恩'); FX({npc:[f.n,10,'报信救了你的家财'],fame:1}); return '三天后，隔壁两家被洗劫一空，你家只丢了几件旧衣裳。'; }},
+   {t:'塞给他一包银钱道谢',d:'送 '+M(amt(c,0.8))+'。',need:needCash(c,amt(c,0.8)),run:function(){ DONE('sheltered','报恩'); FX({cash:-amt(c,0.8),npc:[f.n,20,'你重谢了他']}); return '他推了半天才收下，说往后码头上的事尽管开口。'; }}
+  ]; return [
+   {t:'花钱打点差役',d:'送 '+M(g)+'，求个不了了之。',need:needCash(c,g),run:function(){ DONE('sheltered','连累'); FX({cash:-g}); return R()<0.75?'差役收了钱，说查无此人。':'钱收了，事没了结，衙门里还是记了你一笔。'; }},
+   {t:'把他交出去',d:'自保要紧。',run:function(){ DONE('sheltered','交人'); FX({fame:-3,npc:[f.n,-40,'你把他交给了官差']}); netGrudge(f.n); return f.n+'被铁链锁走，他女人在门口哭了半夜。'; }},
+   {t:'替他作保',d:'说他在你家安分做工。要担干系。',need:need(c.fame>=20||c.rank>=1,'声望或职位不够，保不住人（声望需 20，或有职位）'),run:function(){ DONE('sheltered','作保'); FX({npc:[f.n,30,'你替他作了保'],fame:2,trust:-2}); if(R()<0.3){ WANT(90,'官司缠身'); return '保是作了，可你也被牵进官司里，三个月里不时被传去问话。'; } return '你在保状上画了押，'+f.n+'放了回来。'; }}
+  ]; }});
+ /* 3 家中老人病重 */
+ EV({id:'elder_ill',t:'家中老人病重',e:['q','r','w','p'],ph:'rest',rep:1400,w:1.2,when:function(c){ return c.age>=16&&c.age<=56&&(c.S.par||0)<2; },
+  d:function(c){ return c.e==='p'?'老家拍来电报：母亲病重，县医院说要转到城里的大医院。':'家书到了，说父亲咳血不止，卧床半月，郎中已经摇头。'; },
+  opts:function(c){ var a=amt(c,3,2), b=amt(c,0.8,0.5); var o=[
+   {t:c.e==='p'?'接到城里大医院治':'延请名医',d:'花 '+M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a}); return ill(c,0.7,'病势渐渐稳住了。'); }},
+   {t:c.e==='p'?'在县医院将就治':'请本地郎中抓药',d:'花 '+M(b)+'。',need:needCash(c,b),run:function(){ FX({cash:-b}); return ill(c,0.45,'几服药下去，竟慢慢好转。'); }}];
+   o.push({t:'告假回乡侍疾',d:(c.mil||c.off)?'差事要搁下一阵，上头未必乐意。':'守在床前。',run:function(){ FX({fame:2,health:-2}); if(c.mil||c.off) FX({sup:-3,trust:-1}); return ill(c,0.5,'你守了一个月，人熬过来了。'); }});
+   return o; }});
+ function ill(c,p,ok){
+  if(R()<p) return ok;
+  var S=SS(); S.par=(S.par||0)+1; FX({health:-3});
+  if(c.e==='q'&&c.off&&c.fac==='qing'&&c.rank>=1){ FLAG('mourn','父丧，按制应丁忧守制'); return '人没能留住。按大清律，在任官员闻丧须报丁忧、解任回籍守制二十七个月。'; }
+  return '人没能留住。你料理了后事，'+(c.e==='p'?'追悼会开得很简单。':'出殡那天下着雨。');
+ }
+ /* 4 丁忧 */
+ EV({id:'dingyou',t:'丁忧守制',e:['q'],chain:'mourn',w:12,when:function(c){ return has(c,'mourn',0); },ph:'rest',
+  d:function(){ return '父丧。依制须向上司呈报丁忧，交卸差事回籍守制二十七个月，期满起复。有人劝你先压着不报。'; },
+  opts:function(c){ return [
+   {t:'依制报丁忧',d:'回籍守制，起复后再图进取。',run:function(){ DONE('mourn','守制'); FX({fame:3}); HOLD(820,'丁忧守制'); return '你脱下官服，扶柩回乡。'; }},
+   {t:'匿丧不报',d:'照常当差。一旦被参，是革职的罪名。',run:function(){ DONE('mourn','匿丧'); FLAG('hid_mourn','匿丧不报，留下把柄'); return '你把家书压在箱底，照常上衙门。'; }},
+   {t:'求上司奏请夺情',d:'须上司极为倚重。',need:need(c.sup>=70&&c.rank>=3,'需与'+c.supT+'关系 ≥70 且品级在第 4 级以上'),run:function(){ DONE('mourn','夺情'); FX({trust:2,fame:-1}); HOLD(90,'在籍穿孝百日'); return '上司具折夺情，准你穿孝百日后照常办事。'; }}
+  ]; }});
+ EV({id:'hid_mourn_out',t:'匿丧事发',e:['q'],chain:'hid_mourn',w:5,when:function(c){ return has(c,'hid_mourn',150); },ph:'office',
+  d:function(){ return '有御史风闻你父丧不报，具折参劾。上司把你叫去，问你知不知道这是什么罪名。'; },
+  opts:function(c){ var g=_r2(giftCost(Math.min(7,c.rank+2))*2); return [
+   {t:'认罪补报丁忧',d:'交卸差事，听候议处。',run:function(){ DONE('hid_mourn','认罪'); FX({fame:-5,trust:-6}); HOLD(1080,'匿丧被参、降调'); return '部议降二级调用，守制期满后另行起复。'; }},
+   {t:'花钱上下弥缝',d:'打点 '+M(g)+'，不一定压得住。',need:needCash(c,g),run:function(){ DONE('hid_mourn','弥缝'); FX({cash:-g}); if(R()<0.6) return '折子留中不发，此事不了了之。'; FX({fame:-5,trust:-6}); HOLD(1080,'匿丧被参、降调'); return '钱花了，参劾照样议处。'; }}
+  ]; }});
+ /* 5 族中分家 */
+ EV({id:'clan_split',t:'族中分家',e:['q','r'],once:1,ph:'visit',when:function(c){ return c.age>=22&&c.age<=60&&c.org!=='皇室家庭'; },
+  d:function(c){ return '祖父过世，几房要分家。堂兄说你常年在外，祖产里那几亩好田、临街的铺面不该有你的份，族里的人都在看你怎么说。'; },
+  opts:function(c){ var g=giftCost(2); return [
+   {t:'据理力争',d:'按房分，一分不让。',run:function(){ var n=NPC('tongxiang','堂兄'); s.rel[n]=22; FX({cash:amt(c,4,2),fame:-1}); FLAG('clan_grudge','分家时与堂兄'+n+'结怨',{n:n}); netGrudge(n); return '族长按房分了。'+n+'当着众人摔了茶碗。'; }},
+   {t:'把好田让给堂兄',d:'吃亏是福。',run:function(){ var n=NPC('tongxiang','堂兄'); s.rel[n]=72; FX({fame:2}); FLAG('clan_kind','分家时让了好田给堂兄'+n,{n:n}); return '族里人都说你厚道。'+n+'红着脸收下了。'; }},
+   {t:'请族长公断',d:'备一份礼，'+M(g)+'。',need:needCash(c,g),run:function(){ FX({cash:-g+amt(c,2,1)}); return '族长和了稀泥，各房都不满意，也都不好再闹。'; }}
+  ]; }});
+ EV({id:'clan_back',t:'族中旧账',e:['p'],w:6,when:function(c){ return c.prc&&c.y>=1950&&c.y<=1968&&(has(c,'clan_grudge',300)||has(c,'clan_kind',300)); },ph:'organize',
+  d:function(c){ c.bad=has(c,'clan_grudge',300); var f=c.bad?c.F.clan_grudge:c.F.clan_kind; c.n=f.n; return c.bad?('村里开会，'+f.n+'站起来说你家当年霸占祖产、放债收租，要工作组查你的老底。'):('工作组下来查各家的老底，'+f.n+'出面作证，说你当年分家吃了亏，平日待人厚道。'); },
+  opts:function(c){ if(!c.bad) return [
+   {t:'登门谢他',d:'带两斤红糖。',run:function(){ DONE('clan_kind','作证'); POL(1); FX({npc:[c.n,10,'替你作证'],fame:1}); return '他摆摆手说，当年那几亩田他一直记着。'; }},
+   {t:'不去张扬',d:'这年月，走得太近也不好。',run:function(){ DONE('clan_kind','作证'); POL(1); return '你没去，他也没来。'; }}
+  ]; return [
+   {t:'当众说清当年的账',d:'有分家文书为证。',run:function(){ DONE('clan_grudge','对质'); if(R()<0.55){ FX({fame:1}); return '文书拿出来，工作组没再追问。'; } POL(-1); FX({fame:-2,health:-2}); return '会上没人听你说完。你被记了一笔。'; }},
+   {t:'低头认错',d:'先把这一关过了。',run:function(){ DONE('clan_grudge','认错'); POL(-1); FX({fame:-2}); return '你写了一份检查，在会上念了。'; }},
+   {t:'托老关系说话',d:'须有人肯出面。',need:need(!!netShield(),'关系网里没有肯出面庇护你的人（需有“庇护”门路且关系 ≥80）'),run:function(){ var sh=netShield(); DONE('clan_grudge','说合'); netRemember(sh,'替你挡了族中旧账'); return sh+'出面说了几句话，事情压下来了。'; }}
+  ]; }});
+ /* 6 同乡求荐 */
+ EV({id:'tongxiang',t:'同乡求荐',e:['q','r','w','p'],rep:1000,ph:'request',when:notTop,
+  d:function(c){ return c.e==='p'?'老家来了个后生，揣着大队开的介绍信，想托你在城里找个工作，哪怕临时工也行。':'一个同乡后生提着两包点心来，说想托你写封荐书，在'+c.city+'谋个差事。'; },
+  opts:function(c){ var a=amt(c,0.8,0.4); return [
+   {t:'写信举荐',d:'你的面子押在他身上。',need:need(c.rank>=1||c.sup>=60||c.fame>=35,'人微言轻：需有职位，或与上司关系 ≥60，或声望 ≥35'),run:function(){ var n=NPC('tongxiang','同乡后生'); FX({npc:[n,15,'你举荐了他'],sup:-1}); FLAG('rec','举荐同乡'+n,{n:n}); return n+'千恩万谢地走了。'; }},
+   {t:'给些盘缠',d:M(a)+'，荐书就不写了。',need:needCash(c,a),run:function(){ var n=NPC('tongxiang','同乡后生'); FX({cash:-a,npc:[n,8,'你给了他盘缠']}); return '他收下钱，没再提荐书的事。'; }},
+   {t:'婉言推辞',d:'自己也是寄人篱下。',run:function(){ return '他点点头，点心也没留下。'; }}
+  ]; }});
+ EV({id:'rec_back',t:'同乡的消息',e:['q','r','w','p'],chain:'rec',w:5,when:function(c){ return has(c,'rec',150); },ph:'request',
+  d:function(c){ var f=c.F.rec; c.n=f.n; c.good=R()<0.55; return c.good?(f.n+'在新差事上站稳了脚，托人捎来口信，说有门路可以引荐给你。'):('上头来问话：你举荐的'+f.n+'经手的账目短了一大截，人已经跑了，问举荐人怎么说。'); },
+  opts:function(c){ var a=amt(c,3,1.5); if(c.good) return [
+   {t:'请他引荐',d:'多一条路。',run:function(){ DONE('rec','出息'); FX({npc:[c.n,15,'他投桃报李'],power:2,fame:1}); return '他在饭局上把你介绍给几位要紧人物。'; }},
+   {t:'只叙乡情',d:'不图回报。',run:function(){ DONE('rec','出息'); FX({npc:[c.n,10,'你没向他讨人情'],fame:1}); return '你们喝到半夜，说的都是老家的事。'; }}
+  ]; return [
+   {t:'替他赔补亏空',d:M(a)+'。',need:needCash(c,a),run:function(){ DONE('rec','亏空'); FX({cash:-a,trust:1}); return '账补上了，你在上头那里还算有个交代。'; }},
+   {t:'撇清干系',d:'说自己也被他骗了。',run:function(){ DONE('rec','亏空'); FX({trust:-2,npc:[c.n,-20,'出事后你撇清干系']}); return '上头将信将疑。'; }},
+   {t:'自请处分',d:'举荐失察，认了。',run:function(){ DONE('rec','亏空'); FX({trust:-3,fame:1}); if(c.rank>=1) HOLD(180,'举荐失察'); return '记过一次。'; }}
+  ]; }});
+ /* 7 钱庄倒闭传闻 */
+ EV({id:'bank_rumor',t:'钱庄倒闭传闻',e:['q','r','w'],y:[1850,1948],rep:1500,ph:'earn',when:function(c){ return c.cash>=c.K*8&&!c.top; },
+  d:function(c){ var n=c.e==='q'?'钱庄':'银号'; c.true_=R()<0.55; return c.city+'街上传开了：你存钱的那家'+n+'放出去的款收不回来，东家要跑。门口已经有人在挤。'+(c.y>=1934&&c.y<=1935?'这两年白银大量外流，倒了好几家。':''); },
+  opts:function(c){ var dep=_r2(Math.min(c.cash*0.3,c.K*20)), help=amt(c,4,2); return [
+   {t:'连夜挤进去提款',d:'先把钱拿到手。',run:function(){ if(c.true_) return '你提出来的第二天，那家铺子就上了门板。'; var n=NPC('merchant'); FX({npc:[n,-8,'带头挤提']}); return '虚惊一场，掌柜'+n+'记住了你。'; }},
+   {t:'观望',d:'谣言多半是对头放的。',run:function(){ if(c.true_){ FX({cash:-dep}); return '三天后倒闭，存款只追回一点零头。'; } return '过了几天，风声平息。'; }},
+   {t:'帮掌柜稳住人心',d:'当众存进 '+M(help)+'，以示信任。',need:need(c.biz&&c.rank>=2||c.club==='shanghui','需是有身份的商人（第 3 级以上）或已入商会'),run:function(){ var n=NPC('merchant'); if(c.true_&&R()<0.5){ FX({cash:-help}); return '人心没稳住，'+n+'的铺子还是倒了，你那笔钱打了水漂。'; } FX({fame:2,npc:[n,25,'挤兑时你出面撑场']}); FLAG('bank_saved','挤兑时替掌柜'+n+'撑场',{n:n}); return '你当众存钱，排队的人散了大半。'+n+'握着你的手说不出话。'; }}
+  ]; }});
+ EV({id:'bank_back',t:'掌柜报答',e:['q','r','w'],chain:'bank_saved',w:5,when:function(c){ return has(c,'bank_saved',120); },ph:'earn',
+  d:function(c){ c.n=c.F.bank_saved.n; return c.n+'登门，说当年多亏你撑场。如今铺子缓过来了，想做点什么报答你。'; },
+  opts:function(c){ return [
+   {t:'借一笔低息款周转',d:'月息比市面低一半。',run:function(){ DONE('bank_saved','报答'); FX({cash:amt(c,5,3),npc:[c.n,5,'借你低息款']}); var E=econEnsure(s); E.loans=E.loans||[]; E.loans.push({from:c.n,amt:amt(c,5,3),rate:0.008,due:s.cal.ord+365}); return '一年为期。'; }},
+   {t:'请他介绍几笔生意',d:'',run:function(){ DONE('bank_saved','报答'); FX({fame:2,power:1,npc:[c.n,5,'给你介绍生意']}); return '他的几个老主顾转到了你这边。'; }}
+  ]; }});
+ /* 8 土匪劫道 */
+ EV({id:'bandits',t:'土匪劫道',e:['q','r','w'],rep:900,ph:'disaster',w:function(c){ return {'关外':2.4,'四川':2,'湘鄂':1.5,'直隶':1.2}[c.reg]||0.8; },when:notTop,
+  d:function(c){ return (c.reg==='关外'?'过山的路上，一伙胡子从林子里钻出来，':'走到半道，几个蒙面汉子横刀拦路，')+'领头的说：留下买路钱，人可以走。'; },
+  opts:function(c){ var lose=_r2(Math.min(Math.max(c.cash*0.15,c.K*1.5),c.K*12)); var o=[
+   {t:'破财免灾',d:'交出身上的 '+M(lose)+'。',run:function(){ FX({cash:-lose,debt:false}); return '他们搜了身，挥手放行。'; }},
+   {t:'拼死抵抗',d:c.mil?'你是当兵的，未必怕他们。':'刀枪不长眼。',run:function(){ if(R()<(c.mil?0.6:0.3)){ FX({fame:3,skill:1}); return '你夺了一把刀，砍伤一个，其余的跑了。'; } FX({health:-rint(12,22),cash:-lose,debt:false}); return '你挨了一刀，钱也没保住。'; }},
+   {t:'事后报官',d:'先交钱，记下匪首模样。',run:function(){ FX({cash:-lose,debt:false}); FLAG('bandit_report','劫道后报官，指认了匪首'); return '你在衙门里画了供。'; }}];
+   if(c.club==='qingbang'||c.club==='hongmen'||c.club==='gelao') o.splice(1,0,{t:'亮出帮里字号',d:'报上辈分。',run:function(){ FX({club:-1}); return '领头的拱了拱手，说是自家人，放你过去。'; }});
+   return o; }});
+ EV({id:'bandit_back',t:'匪首的下落',e:['q','r','w','p'],chain:'bandit_report',w:4,when:function(c){ return has(c,'bandit_report',90); },ph:'arrest',
+  d:function(c){ c.good=R()<0.5; return c.good?'官兵剿了那股土匪，起出一批赃物，叫失主去认领。':'夜里有人往你家院子里扔了块石头，上面绑着纸条：报官的，等着。'; },
+  opts:function(c){ if(c.good) return [
+   {t:'去认领',d:'',run:function(){ DONE('bandit_report','剿灭'); FX({cash:amt(c,1,0.5),fame:1}); return '认回了一部分。'; }},
+   {t:'不去了',d:'怕再惹是非。',run:function(){ DONE('bandit_report','剿灭'); return '你没去。'; }}
+  ]; return [
+   {t:'搬去城里亲戚家暂住',d:'花 '+M(amt(c,1.5))+'。',run:function(){ DONE('bandit_report','报复'); FX({cash:-amt(c,1.5)}); return '你躲了两个月，那伙人被调去别处了。'; }},
+   {t:'请团练守夜',d:'',run:function(){ DONE('bandit_report','报复'); if(R()<0.6){ FX({cash:-amt(c,1)}); return '守了半个月，相安无事。'; } FX({cash:-amt(c,2),health:-10}); return '那夜还是被人摸进来，你挨了一棍。'; }}
+  ]; }});
+ /* 9 时疫 */
+ EV({id:'epidemic',t:'时疫流行',e:['q','r','w'],rep:900,ph:'disaster',w:function(c){ return (c.m>=5&&c.m<=9)?1.6:0.5; },
+  d:function(c){ c.plague=(c.reg==='两广'&&c.y>=1894&&c.y<=1895)||(c.reg==='关外'&&(c.y===1910||c.y===1911)); if(c.plague) return '鼠疫。'+c.city+'每天往城外抬尸首，街坊里一家接一家地关了门，官府在街口烧石灰、封房子。';
+   return '霍乱来了。早上还好好的人，上吐下泻，到晚上就没了气。'+c.city+'的棺材铺连夜赶工，药铺门口排起长队。'; },
+  opts:function(c){ var a=amt(c,2,1), b=amt(c,1,0.6); var o=[
+   {t:'闭门不出，只喝滚水',d:'能躲则躲。',run:function(){ if(R()<0.2){ FX({health:-rint(15,30)}); return '还是染上了，九死一生，捡回一条命。'; } FX({health:-rint(0,3)}); return '你家闭门一个月，熬过去了。'; }},
+   {t:'出钱施药、捐棺',d:M(a)+'，要往人堆里去。',need:needCash(c,a),run:function(){ FX({cash:-a,fame:4}); if(R()<0.3){ FX({health:-rint(10,22)}); return '你在施药棚里站了半个月，后来自己也倒下了，好在挺了过来。'; } return '街坊记着你的好。'; }}];
+   o.push({t:'举家避往乡下',d:(c.off||c.mil)?'擅离职守，上头会记一笔。':'花 '+M(b)+' 雇船。',need:(c.off||c.mil)?'':needCash(c,b),run:function(){ if(c.off||c.mil){ FX({sup:-4,trust:-3}); return '你躲过了疫，没躲过上司的脸色。'; } FX({cash:-b}); return '乡下也有疫，只是少些。'; }});
+   return o; }});
+ /* 10 上司索贿 */
+ EV({id:'boss_bribe',t:'上司索贿',e:['q','r','w'],rep:1200,ph:'gift',w:1.4,when:function(c){ return (c.off||c.mil)&&c.rank<=5&&!c.top&&!(c.fac==='cpc'); },
+  d:function(c){ return c.e==='q'?(c.supT+'的门房捎话：大人做寿，各位同僚的寿礼都已送到，就差你一份。话里话外，考语还没写。')
+   :(c.supT+'的副官来串门，说年底考绩就要报上去了，长官最近手头紧，大家都在“表示”。'); },
+  opts:function(c){ var g=_r2(giftCost(Math.min(7,c.rank+1))*1.5); return [
+   {t:'照数奉上',d:M(g)+'。',need:needCash(c,g),run:function(){ FX({cash:-g,sup:8}); FLAG('paid_bribe','给'+c.supT+'送过一份厚礼'); return '礼送进去，门房笑脸相迎。'; }},
+   {t:'只送一半',d:M(_r2(g/2))+'，再说几句好话。',need:needCash(c,_r2(g/2)),run:function(){ FX({cash:-_r2(g/2),sup:2}); return '收是收了，话没回。'; }},
+   {t:'婉言推掉',d:'说手头实在拮据。',run:function(){ FX({sup:-12,fame:1}); FLAG('refused_bribe','拒绝了'+c.supT+'的索贿'); HOLD(360,'考绩被压'); return '副官笑了笑，没再说什么。'; }}
+  ]; }});
+ EV({id:'kaoji',t:'考绩被压',e:['q','r','w'],chain:'refused_bribe',w:6,when:function(c){ return has(c,'refused_bribe',60); },ph:'office',
+  d:function(c){ return '考绩下来，你被列为“平常”，评语只有四个字：才具平庸。同僚里送了礼的都是“卓异”。'; },
+  opts:function(c){ var g=_r2(giftCost(Math.min(7,c.rank+1))*3); return [
+   {t:'忍下来',d:'来日方长。',run:function(){ DONE('refused_bribe','忍'); FX({trust:-2}); return '你照常上差，只是更沉默了。'; }},
+   {t:'越级申诉',d:'把账摆出来。',need:need(c.fame>=30,'声望不足 30，越级的状子递不上去'),run:function(){ DONE('refused_bribe','申诉'); if(R()<0.35){ UNHOLD(); FX({fame:4,sup:-10}); return '上面派人来查，'+c.supT+'被申饬，你的考语改了。'; } HOLD(540,'越级申诉，得罪上司'); FX({sup:-8,trust:-3}); return '状子转回到'+c.supT+'手里。'; }},
+   {t:'补一份厚礼',d:M(g)+'。',need:needCash(c,g),run:function(){ DONE('refused_bribe','补礼'); UNHOLD(); FX({cash:-g,sup:6}); FLAG('paid_bribe','给'+c.supT+'补送厚礼'); return '考语没改，明年的却有了着落。'; }}
+  ]; }});
+ EV({id:'bribe_probe',t:'清查旧账',e:['q','r','w','p'],chain:'paid_bribe',w:4,when:function(c){ return has(c,'paid_bribe',240); },ph:'office',
+  d:function(c){ return c.e==='p'?'“三反”运动，机关里查到当年的旧账，你送过礼的那位已经被关起来了，交代材料里有你的名字。':'你送过礼的那位上司因贪墨被参，查案的人顺着礼单一个个问。'; },
+  opts:function(c){ var g=_r2(giftCost(Math.min(7,c.rank+1))*2); return [
+   {t:'主动说明',d:'送礼是不得已。',run:function(){ DONE('paid_bribe','说明'); FX({trust:-3,fame:-2}); HOLD(180,'牵涉贪墨案'); return '你写了材料，记过了事。'; }},
+   {t:'再花钱弥缝',d:M(g)+'。',need:c.e==='p'?'这年月，花钱只会罪加一等':needCash(c,g),run:function(){ DONE('paid_bribe','弥缝'); FX({cash:-g}); if(R()<0.5) return '名单上划掉了你。'; FX({trust:-6}); HOLD(360,'行贿弥缝事发'); return '收钱的人转手就把你供了出去。'; }},
+   {t:'咬定不知',d:'',run:function(){ DONE('paid_bribe','抵赖'); if(R()<0.4) return '查案的人没再追问。'; FX({trust:-6,fame:-3}); HOLD(360,'牵涉贪墨案'); if(c.e==='p') POL(-1); return '礼单上有你的笔迹。'; }}
+  ]; }});
+ /* 11 报馆约稿 */
+ EV({id:'press',t:'报馆约稿',e:['q','r','w'],y:[1896,1949],rep:1100,ph:'study',when:function(c){ return !c.top&&(c.lit||c.skill>=30); },
+  d:function(c){ var p=c.y<1912?'《时务报》一类的新报':(c.y<1937?c.city+'的一家日报':'一家还在出版的报纸'); return p+'的编辑来约稿，想请你就时局写一篇，稿费从优，也提醒你：检查的人最近盯得紧。'; },
+  opts:function(c){ return [
+   {t:'据实直言',d:'署真名。',run:function(){ FX({fame:4,cash:amt(c,0.3,0.1)}); if(c.off||c.mil) FX({sup:-3}); POL(1); FLAG('pen_record','在报上署名批评时政'); return '文章登出来，几家报纸转载。'; }},
+   {t:'用笔名写些温和的',d:'稿费照拿。',run:function(){ FX({fame:1,cash:amt(c,0.6,0.2)}); return '一篇不痛不痒的文章，换了些稿费。'; }},
+   {t:'推掉',d:'',run:function(){ return '编辑说可惜。'; }}
+  ]; }});
+ EV({id:'pen_trouble',t:'文章惹祸',e:['q','r','w'],chain:'pen_record',w:4,when:function(c){ return has(c,'pen_record',100)&&c.fac!=='cpc'; },ph:'arrest',
+  d:function(c){ return c.y<1912?'那篇文章传到了督抚衙门，说你“妄议朝政”，要地方官查办。':'那家报馆被查封了，编辑被带走，警察局来人说要“请你去谈谈”。'; },
+  opts:function(c){ var g=giftCost(Math.min(7,c.rank+2)); return [
+   {t:'登报更正',d:'服个软。',run:function(){ DONE('pen_record','更正'); FX({fame:-3}); return '更正启事登在报屁股上。'; }},
+   {t:'避往外埠',d:'去租界或外省住一阵，花 '+M(amt(c,2,1))+'。',run:function(){ DONE('pen_record','出走'); FX({cash:-amt(c,2,1)}); WANT(120,'避居外埠'); return '你连夜上了船。'; }},
+   {t:'托人疏通',d:M(g)+'。',need:needCash(c,g),run:function(){ DONE('pen_record','疏通'); FX({cash:-g}); return R()<0.7?'人情托到了，事情压下。':'钱花了，还是被叫去问了两天话。'; }}
+  ]; }});
+ /* 12 学生游行邀你署名 */
+ EV({id:'student_sign',t:'学生请你署名',e:['q','r','w'],rep:1500,ph:'organize',
+  when:function(c){ var y=c.y; return !c.top&&!c.prc&&((y>=1903&&y<=1911)||(y>=1915&&y<=1936)||(y>=1945&&y<=1948))&&(c.stu||c.act||c.lit||(c.off&&c.rank<=3)||c.biz); },
+  d:function(c){ var y=c.y, why=y<=1911?(y>=1911?'保路':(y<=1904?'拒俄':(y<=1906?'抵制美货、反对华工禁约':'收回路矿利权'))):(y<=1920?'反对巴黎和会把山东让给日本':(y<=1926?'声援被枪杀的工人':(y<=1936?'反对华北自治、要求抗日':'反饥饿、反内战'))); return '几个学生找上门，正在为'+why+'联名请愿，请你在通电上签个名，说你的名字有分量。'; },
+  opts:function(c){ var a=amt(c,1,0.5); return [
+   {t:'署名',d:'名字会登在报上。',run:function(){ FX({fame:3}); if(c.off||c.mil) FX({sup:-4}); POL(2); FLAG('signed','在学生的联名通电上署名'); return '第二天，你的名字出现在报纸上。'; }},
+   {t:'捐钱不署名',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,fame:1}); return '学生收下钱，有点失望。'; }},
+   {t:'推说有事',d:'',run:function(){ FX({fame:-1}); return '学生走时，有人在门口啐了一口。'; }}
+  ]; }});
+ EV({id:'blacklist',t:'名单上的名字',e:['q','r','w'],chain:'signed',w:5,when:function(c){ return has(c,'signed',90)&&!c.prc&&c.fac!=='cpc'; },ph:'arrest',
+  d:function(c){ return '有熟人悄悄告诉你：'+(c.y<1912?'巡警道':(c.y<1928?'警察厅':'侦缉队'))+'的名单上有你的名字，就因为那次署名。这几天可能来抓人。'; },
+  opts:function(c){ var g=giftCost(Math.min(7,c.rank+2)); return [
+   {t:'连夜出走',d:'去外埠避风头，花 '+M(amt(c,2,1))+'。',run:function(){ DONE('signed','出走'); FX({cash:-amt(c,2,1)}); WANT(180,'避祸在外'); return '你托人照看家里，独自上了车。'; }},
+   {t:'托人销名',d:'花 '+M(g)+'。',need:need(c.sup>=60||c.club==='qingbang'||!!netShield(),'没有能说上话的人（需上司关系 ≥60、或入青帮、或有人庇护）')||needCash(c,g),run:function(){ DONE('signed','销名'); FX({cash:-g}); return '名字划掉了，你欠下一个人情。'; }},
+   {t:'不走',d:'问心无愧。',run:function(){ DONE('signed','硬顶'); if(R()<0.5){ FX({health:-12,trust:-5,cash:-amt(c,2,1),fame:3}); return '凌晨被带走，关了二十多天，家里托人花钱才保出来。'; } FX({fame:2}); return '风声过去了，没人来。'; }}
+  ]; }});
+ /* 13 新政权审查履历（政治处境的总账） */
+ var HIST_KEYS=['signed','pen_record','hid_rev','saved_friend','collab','comprador','overseas_kin','hoarder','crushed_strike','paid_bribe','society','double','went_west'];
+ EV({id:'p_review',t:'交代历史',e:['p'],once:1,w:5,ph:'office',when:function(c){ return c.prc&&c.y>=1950&&c.y<=1953&&HIST_KEYS.some(function(k){ return ever(c,k); }); },
+  d:function(c){ return '单位让每个人写自传，交代 1949 年以前的经历：在哪里做事，参加过什么组织，与什么人来往。组织上要逐条核对。'; },
+  opts:function(c){ return [
+   {t:'一五一十写清楚',d:'好的坏的都写上。',run:function(){ if(c.pol>=2){ FX({trust:5,power:2}); POL(1); return '组织上认为你历史清楚，早年倾向进步，被列为可以信任、可以培养的人。'; } if(c.pol<0){ FX({trust:-2}); POL(1); FLAG('confessed','建国初如实交代了历史问题'); return '材料存进档案。有问题，但你交代了。'; } FX({trust:1}); return '材料存进档案，没有下文。'; }},
+   {t:'有些事略过不提',d:'省得节外生枝。',run:function(){ if(c.pol<0) FLAG('hid_history','建国初交代历史时有所隐瞒'); return '材料交上去了。'; }}
+  ]; }});
+ /* 14 洋行高薪挖人 */
+ EV({id:'foreign_firm',t:'洋行挖人',e:['q','r','w'],rep:2000,ph:'earn',
+  when:function(c){ return !c.top&&!c.prc&&((c.y>=1862&&c.y<=1941)||(c.y>=1946&&c.y<=1948))&&['江浙','两广','直隶','湘鄂'].indexOf(c.reg)>=0&&(c.biz||c.off||c.stu)&&c.rank<=4&&c.skill>=28&&!c.occ; },
+  d:function(c){ return c.city+'一家洋行的大班托人来说：看中你懂行情、会说话，请你去做'+(c.y<1912?'买办':'华经理')+'，薪水是你现在的好几倍。'; },
+  opts:function(c){ return [
+   {t:'辞了现差去洋行',d:'先拿 '+M(amt(c,8,4))+' 的押柜和花红。',run:function(){ FX({cash:amt(c,8,4),fame:-1}); if(c.off||c.mil) FX({sup:-6}); POL(-2); FLAG('comprador','给洋行做过'+(c.y<1912?'买办':'华经理')); return '你换上洋装，进了'+c.city+'的洋行大楼。'; }},
+   {t:'兼做顾问',d:'不辞现差，拿一份车马费。',run:function(){ FX({cash:amt(c,2,1)}); POL(-1); FLAG('comprador','兼任洋行顾问'); return '每月去洋行坐两个下午。'; }},
+   {t:'婉拒',d:'',run:function(){ FX({fame:1}); return '大班耸耸肩。'; }}
+  ]; }});
+ EV({id:'comprador_back',t:'洋行的旧账',e:['p'],chain:'comprador',w:5,when:function(c){ return c.prc&&c.y>=1951&&c.y<=1958&&has(c,'comprador',0); },ph:'office',
+  d:function(){ return '运动中，有人揭发你早年在洋行做事，说你“替帝国主义经济侵略服务”，要你写清楚。'; },
+  opts:function(c){ return [
+   {t:'详细交代',d:'经手的账、来往的人都写上。',run:function(){ DONE('comprador','交代'); FX({trust:-2}); POL(1); return '交代了三个月，结论是“一般历史问题”。'; }},
+   {t:'只谈业务',d:'',run:function(){ DONE('comprador','含糊'); if(R()<0.5) return '过关了。'; FLAG('hid_history','洋行旧账交代不清'); FX({trust:-3}); return '材料被退回，说你避重就轻。'; }}
+  ]; }});
+ /* 15 拉壮丁 */
+ EV({id:'conscript',t:'抓壮丁',e:['r','w'],pk:[['q7',1937,1945],['wuhan',1938,1945],['wuhan_3',1938,1945]],w:function(c){ return c.e==='w'?1.6:0.8; },rep:1000,ph:'drill',
+  when:function(c){ return !c.mil&&!c.top&&c.rank<=1&&c.age>=17&&c.age<=45&&c.fac!=='cpc'&&!c.prc&&((c.y>=1916&&c.y<=1936)||(c.y>=1938&&c.y<=1949)); },
+  d:function(c){ return c.e==='w'?'保长带着兵挨家挨户点人头，“三丁抽一、五丁抽二”。抽不到的，路上见着青壮就绑，绳子一串，押往新兵营。':'过境的军队在街上抓夫，说是挑弹药，抓走的人很少有回来的。'; },
+  opts:function(c){ var a=amt(c,5,3); return [
+   {t:'花钱买人顶替',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a}); return '保长收了钱，第二天绳子上拴的是另一个人。'; }},
+   {t:'托人说情',d:'',need:need(!!netShield()||c.sup>=65,'没有说得上话的人（需有人庇护，或上司关系 ≥65）'),run:function(){ var sh=netShield(); if(sh) netRemember(sh,'抓壮丁时保了你'); FX({cash:-amt(c,0.5)}); return '有人打了招呼，你的名字从册子上划掉了。'; }},
+   {t:'躲进山里',d:'',run:function(){ if(R()<0.35){ FX({health:-rint(14,22),cash:-amt(c,1)}); return '还是被搜出来押走了。三个月后，你趁夜从营里逃回，脚上的血泡烂了一路。'; } FX({health:-4}); return '在山洞里躲了半个月，熬过了这一阵。'; }}
+  ]; }});
+ /* 16 军阀摊派 */
+ EV({id:'levy',t:'军阀摊派',e:['r'],y:[1916,1935],rep:800,ph:'office',w:function(c){ return c.reg==='四川'?2.2:1; },when:function(c){ return !c.top&&!c.mil; },
+  d:function(c){ return c.reg==='四川'?'防区里的军长又派下来“预征”，田赋已经征到了好几年以后，这回是“剿匪捐”。':'驻军开拔前要“开拔费”，按户按铺摊派，三天交齐。'; },
+  opts:function(c){ var a=amt(c,3,1.5); return [
+   {t:'照摊',d:M(a)+'。',run:function(){ FX({cash:-a}); return '收据是一张盖着红印的毛边纸。'; }},
+   {t:'联络商会抗捐',d:'',need:need(c.club==='shanghui'||(c.biz&&c.rank>=2),'须入商会，或是有身份的商人'),run:function(){ if(R()<0.5){ FX({fame:3,club:4}); return '商会出面讲价，摊派减了一半。'; } FX({health:-8,cash:-_r2(a*1.5)}); return '带头的几个被扣在司令部，你交了双倍才放出来。'; }},
+   {t:'拖着不交',d:'',run:function(){ if(R()<0.45){ FX({health:-5,cash:-_r2(a*1.3)}); return '兵上门把你押去关了两天，钱一文没少。'; } return '部队提前开拔了。'; }}
+  ]; }});
+ /* 17 空袭 */
+ var RAID={'四川':[1938,1944],'湘鄂':[1938,1944],'两广':[1937,1944],'江浙':[1937,1937],'直隶':[1937,1937]};
+ EV({id:'air_raid',t:'空袭警报',e:['w'],rep:500,w:1.6,ph:'disaster',pk:[['era_war_2',1938,1944]],
+  when:function(c){ var r=RAID[c.reg]; return (r&&c.y>=r[0]&&c.y<=r[1]&&!c.occ)||(c.fac==='cpc'&&c.y>=1938&&c.y<=1941); },
+  d:function(c){ return '防空司令部挂起了红灯笼，警报一声紧过一声。街上的人往防空洞挤，天边已经传来飞机的嗡嗡声。'; },
+  opts:function(c){ return [
+   {t:'挤进防空洞',d:'洞里闷热，人挤人。',run:function(){ if(c.reg==='四川'&&c.y===1941&&R()<0.3){ FX({health:-rint(10,18)}); return '洞里的人越挤越多，喘不上气。你被人拖出洞口时已经昏了过去。'; } FX({health:-rint(0,3)}); return '炸弹落在两条街外。出来时，那里只剩一片瓦砾。'; }},
+   {t:'冒险抢运货物文卷',d:(c.biz||c.off)?'值钱的东西都在铺子里。':'',run:function(){ if(R()<0.6){ FX({fame:1}); return '你抢出了大半，刚跑出巷口，身后的屋子就塌了。'; } FX({health:-rint(8,16),cash:-amt(c,3,1)}); return '弹片划破了你的腿，东西也没抢出来。'; }},
+   {t:'回去救人',d:'隔壁还有老人没出来。',run:function(){ FX({fame:3}); if(R()<0.45) FX({health:-rint(6,14)}); var n=NPC('tongxiang','老街坊'); s.rel[n]=75; FLAG('raid_rescue','空袭时救出街坊'+n,{n:n}); return '你把人背了出来。'; }}
+  ]; }});
+ EV({id:'raid_back',t:'救命之恩',e:['w','p'],chain:'raid_rescue',w:4,when:function(c){ return has(c,'raid_rescue',200); },ph:'visit',
+  d:function(c){ c.n=c.F.raid_rescue.n; return '当年空袭时你背出来的'+c.n+'，家里儿子出息了，一家人提着东西来谢你。'; },
+  opts:function(c){ return [
+   {t:'收下心意',d:'',run:function(){ DONE('raid_rescue','报恩'); FX({npc:[c.n,10,'登门道谢'],cash:amt(c,0.6)}); return '他们执意要留下东西。'; }},
+   {t:'留他们吃饭',d:'',run:function(){ DONE('raid_rescue','报恩'); FX({npc:[c.n,15,'登门道谢'],fame:1}); return '饭桌上说起那天，大家都不说话了。'; }}
+  ]; }});
+ /* 18 战火逼近 */
+ EV({id:'flee',t:'战火逼近',e:['w'],pk:[['q7_3',1937,1938]],once:1,w:3,ph:'disaster',
+  when:function(c){ var r=OCC[c.reg]; return !c.top&&c.fac!=='cpc'&&r&&c.yf>=r[0]-0.25&&c.yf<r[0]+0.1&&c.reg!=='关外'; },
+  d:function(c){ return '日军离'+c.city+'只有几天路程了。机关、学校、工厂在拆机器装船，往西撤；城里的人走的走，留的留。'; },
+  opts:function(c){ var a=amt(c,3,2); return [
+   {t:'跟着往西撤',d:'沿途花费约 '+M(a)+'。',run:function(){ FX({cash:-a,health:-rint(3,8)}); FLAG('went_west','抗战时随机关学校西迁'); if(c.fac==='kmt') FX({pf:3}); return '你挤上了最后一班船，回头看见城里冒起黑烟。'; }},
+   {t:'留下守着家',d:'老人走不动。',run:function(){ FLAG('stayed_occupied','抗战时留在沦陷区'); return '城破那天，你把门顶上，一家人缩在里屋。'; }},
+   {t:'先把家眷送走',d:M(_r2(a*0.7))+'，自己留下料理。',need:needCash(c,_r2(a*0.7)),run:function(){ FX({cash:-_r2(a*0.7)}); FLAG('stayed_occupied','抗战时留在沦陷区'); return '家眷走了，你一个人留下看铺子。'; }}
+  ]; }});
+ /* 19 伪政权拉拢 */
+ EV({id:'puppet',t:'伪政权拉拢',e:['w'],y:[1938,1944],once:1,w:3,ph:'office',
+  when:function(c){ return !c.top&&c.fac!=='cpc'&&(has(c,'stayed_occupied',60)||(c.occ&&c.rank>=2))&&(c.off||c.biz||c.lit); },
+  d:function(c){ return '“维持会”的人带着日本宪兵队的翻译上门，请你出来做事，说给你'+(c.biz?'商会会长':'科长')+'的位子，薪水照发，还能保你一家平安。'; },
+  opts:function(c){ return [
+   {t:'出任伪职',d:'活下去要紧。',run:function(){ FX({cash:amt(c,10,5),fame:-6}); POL(-4); FLAG('collab','抗战时在伪政权任职'); return '你的名字登在了维持会的布告上。'; }},
+   {t:'称病闭门',d:'',run:function(){ FX({health:-2,cash:-amt(c,1),fame:2}); if(R()<0.25){ FX({health:-10}); return '他们不信，把你拉去宪兵队“问话”，打了一顿才放回来。'; } return '你在床上躺了三个月，他们没再来。'; }},
+   {t:'假意应付，暗中给后方送信',d:'两头都可能要你的命。',run:function(){ FLAG('double','沦陷时期暗中为后方传递消息'); if(R()<0.25){ FX({health:-rint(12,20)}); return '有一封信被截了，你在宪兵队里熬过了七天。'; } FX({fame:-1}); return '你每月把听到的消息写成密信，交给一个卖菜的。'; }}
+  ]; }});
+ EV({id:'hanjian',t:'惩办汉奸',e:['w'],chain:'collab',w:9,when:function(c){ return has(c,'collab',0)&&c.yf>=1945.66&&c.y<=1947; },ph:'arrest',
+  d:function(){ return '胜利了。肃奸的布告贴满街头，当年在伪政权做过事的人一个个被带走，家产查封。有人来通风报信，说下一个就是你。'; },
+  opts:function(c){ var a=_r2(Math.max(c.K*6,c.cash*0.6)); return [
+   {t:'散财打点',d:'约 '+M(a)+'，“劫收”大员也收钱。',need:needCash(c,a),run:function(){ DONE('collab','打点'); FX({cash:-a,fame:-3}); return '你的案卷被压在了最底下。'; }},
+   {t:'投案',d:'听候审判。',run:function(){ DONE('collab','投案'); FX({health:-10,fame:-6,trust:-8}); HOLD(720,'汉奸案在身'); return '判了两年，因“未有残害同胞之实据”减刑。'; }},
+   {t:'潜逃',d:'',run:function(){ DONE('collab','潜逃'); FX({fame:-4}); WANT(730,'被通缉'); return '你换了名字，躲进乡下。'; }}
+  ]; }});
+ /* 20 金圆券限价 */
+ EV({id:'gold_yuan',t:'金圆券限价',e:['w'],once:1,w:3,ph:'earn',when:function(c){ return c.yf>=1948.58&&c.yf<1948.84&&!c.top&&c.fac!=='cpc'&&c.cash>=c.K*3; },
+  d:function(){ return '政府发行金圆券，限期以金银外币兑换，物价冻结在八月十九日。经济督导员在上海“打老虎”，抓了好几个大户。'; },
+  opts:function(c){ var part=_r2(c.cash*0.5); return [
+   {t:'照令兑出金银',d:'把一半家底换成金圆券。',run:function(){ FX({cash:-_r2(part*0.7),trust:2}); return '两个月后限价崩溃，物价一天几涨，你换来的金圆券只剩三成。'; }},
+   {t:'私藏不兑',d:'被查到就是“扰乱金融”。',run:function(){ if(R()<0.3){ FX({cash:-part,fame:-2}); return '检查队搜出了金条，悉数没收。'; } return '你把金子埋在了后院。'; }},
+   {t:'抢购囤货',d:'',run:function(){ if(c.biz&&R()<0.6){ FX({cash:amt(c,2,1),fame:-2}); FLAG('hoarder','金圆券时期抢购囤货'); POL(-1); return '限价一破，货价翻了几番。'; } FX({cash:-_r2(part*0.3)}); return '排了两天队，只抢到几匹布。'; }}
+  ]; }});
+ /* ---------- 新中国（谨慎写实，记录处境，不作评判） ---------- */
+ /* 21 土改划成分 */
+ EV({id:'land_reform',t:'土改划成分',e:['p'],y:[1950,1952],once:1,w:4,ph:'office',when:function(c){ return c.prc&&!c.top; },
+  d:function(c){ c.cls=c.org==='乡绅家庭'||c.org==='皇室家庭'?'地主':(c.org==='商人家庭'?'工商业兼地主':(c.rich?'富农':'中农')); return '土改工作队进了村，丈量土地、算剥削账，按占地、雇工和放债的情况评定每户成分。按你家的田产和收租，初评是“'+c.cls+'”。'; },
+  opts:function(c){ var heavy=c.cls==='地主'||c.cls==='工商业兼地主'; var o=[
+   {t:'据实申报，接受评定',d:'',run:function(){ var S=SS(); S.label=c.cls; if(heavy){ POL(-3); FX({cash:-_r2(c.cash*0.5),fame:-3}); return '定为'+c.cls+'。田地、房屋、浮财按政策没收分配。'; } if(c.cls==='富农'){ POL(-1); return '定为富农，多余的土地征收。'; } return '定为中农，不动。'; }}];
+   if(heavy||c.cls==='富农') o.push({t:'主动献田献房',d:'争取宽大。',run:function(){ var S=SS(); S.label=heavy?'开明地主':c.cls; POL(heavy?-1:0); FX({cash:-_r2(c.cash*0.6),fame:1}); return '你把地契交到了工作队手里，会上被点名表扬了一句。'; }});
+   o.push({t:'托人往低里划',d:'',need:need(!!netShield(),'没有肯为你出面的人（需有人庇护）'),run:function(){ var S=SS(); if(R()<0.5){ S.label=heavy?'富农':'中农'; FLAG('class_hidden','土改时托人改划了成分'); return '成分改划了一级。'; } S.label=c.cls; POL(heavy?-4:-2); FX({fame:-3}); return '说情的事被揭了出来，罪加一等。'; }});
+   return o; }});
+ /* 22 五反 */
+ EV({id:'five_anti',t:'五反',e:['p'],y:[1952,1952],once:1,w:4,ph:'office',when:function(c){ return c.prc&&c.biz; },
+  d:function(){ return '“五反”运动：反行贿、反偷税漏税、反盗骗国家财产、反偷工减料、反盗窃经济情报。店员和工人组成检查组，查你的账。'; },
+  opts:function(c){ var a=_r2(Math.max(c.K*6,c.cash*0.3)); return [
+   {t:'坦白补税退赔',d:'约 '+M(a)+'。',run:function(){ FX({cash:-a}); POL(1); return '你被评为“基本守法户”。'; }},
+   {t:'只认小错',d:'',run:function(){ if(R()<0.5){ FX({cash:-_r2(a*0.5)}); return '检查组接受了你的说法。'; } FX({cash:-_r2(a*1.5),health:-6,fame:-3}); POL(-1); return '店员揭发了你的暗账，你在大会上被批斗，定为“半守法半违法户”。'; }}
+  ]; }});
+ /* 23 抗美援朝捐献 */
+ EV({id:'donate51',t:'捐献飞机大炮',e:['p'],y:[1951,1951],once:1,w:3,ph:'organize',when:function(c){ return c.prc&&!c.top; },
+  d:function(){ return '抗美援朝，各界开展捐献飞机大炮运动，单位里贴出了认捐榜，每天更新。'; },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:'踊跃认捐',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,trust:3}); POL(1); return '你的名字上了光荣榜。'; }},
+   {t:'按最低数目捐',d:M(_r2(a/4))+'。',run:function(){ FX({cash:-_r2(a/4)}); return '捐了，没人说什么。'; }}
+  ]; }});
+ /* 24 公私合营 */
+ EV({id:'merge56',t:'公私合营',e:['p'],y:[1955,1956],once:1,w:4,ph:'earn',when:function(c){ return c.prc&&c.biz; },
+  d:function(){ return '全行业公私合营的高潮到了。敲锣打鼓的队伍一条街一条街地走过，各家铺子争着递申请书。合营后按资产核定股额，每年领五厘定息。'; },
+  opts:function(c){ return [
+   {t:'带头递申请',d:'',run:function(){ FX({trust:4,fame:2}); POL(1); return '铺子挂上了“公私合营”的牌子，你留任副经理。'; }},
+   {t:'等等再说',d:'',run:function(){ FX({trust:-3}); return '半个月后，整条街只剩你一家没递，你还是递了。'; }}
+  ]; }});
+ /* 25 肃反检举 */
+ EV({id:'sufan',t:'检举揭发',e:['p'],y:[1955,1956],once:1,w:3,ph:'office',when:function(c){ return c.prc&&!c.top; },
+  d:function(c){ c.n=NPC(c.mil?'military':'official','同事'); return '肃反运动，单位的领导小组找你谈话，说'+c.n+'历史上有疑点，你和他共事多年，要你“提供材料”。'; },
+  opts:function(c){ var o=[
+   {t:'检举他',d:'把知道的都写上。',run:function(){ FX({trust:4,npc:[c.n,-35,'你写了他的检举材料']}); netGrudge(c.n); POL(1); FLAG('informer','肃反时检举了同事'+c.n,{n:c.n}); return '材料交上去，'+c.n+'被隔离审查。'; }},
+   {t:'说不了解情况',d:'',run:function(){ FX({trust:-2,npc:[c.n,10,'你没有检举他']}); return '领导小组说你“觉悟不高”。'; }}];
+   if(c.pol<0) o.push({t:'借机交代自己的历史',d:'',run:function(){ FX({trust:-1}); POL(1); FLAG('confessed','肃反时主动交代了历史问题'); return '你写了二十页的交代材料。'; }});
+   return o; }});
+ /* 26 鸣放 */
+ EV({id:'mingfang',t:'鸣放座谈会',e:['p'],y:[1957,1957],once:1,w:5,ph:'office',when:function(c){ return c.prc&&c.m>=4&&c.yf<1957.5&&(c.lit||c.off||c.biz)&&!c.top; },
+  d:function(){ return '整风运动，党委连着开座谈会，请大家“大鸣大放”，帮助党整风，保证“言者无罪”。主持人点到你的名字。'; },
+  opts:function(c){ return [
+   {t:'直言提意见',d:'说说外行领导内行的事。',run:function(){ FX({fame:2}); FLAG('spoke57','鸣放时在座谈会上直言提意见'); return '会场静了一下，有人带头鼓掌。'; }},
+   {t:'只谈成绩',d:'',run:function(){ return '你说了几句工作上的小建议。'; }},
+   {t:'托病不去',d:'',run:function(){ FX({trust:-1}); return '后来的会你都没去。'; }}
+  ]; }});
+ EV({id:'antiright',t:'反右',e:['p'],chain:'spoke57',w:12,when:function(c){ return has(c,'spoke57',30)&&c.yf>=1957.5&&c.y<=1958; },ph:'organize',
+  d:function(){ return '风向变了。报纸上的社论说，有人借整风向党进攻。你在座谈会上的发言被整理成材料，贴在了走廊里。'; },
+  opts:function(c){ return [
+   {t:'深刻检讨',d:'',run:function(){ DONE('spoke57','检讨'); if(R()<0.5){ POL(-1); FX({trust:-4,health:-3}); return '你写了七次检讨，最后定为“中右”，内部控制使用。'; } return rightist(c); }},
+   {t:'坚持原意',d:'',run:function(){ DONE('spoke57','坚持'); FX({health:-5}); return rightist(c); }}
+  ]; }});
+ function rightist(c){ var S=SS(); S.label=S.label?(S.label+'，右派'):'右派'; POL(-4); FX({trust:-10,fame:-4,cash:-amt(c,2,1)}); HOLD(1800,'被划为右派'); FLAG('rightist','1957 年被划为右派'); return '被划为右派分子，降级降薪，下放劳动。'; }
+ /* 27 大跃进 */
+ EV({id:'leap',t:'放卫星',e:['p'],y:[1958,1959],once:1,w:4,ph:'work',pk:[['greatleap58',1958,1960],['leap58',1958,1960]],when:function(c){ return c.prc&&!c.top; },
+  d:function(c){ return c.mil?'部队支援地方“大办钢铁”，各营比着报产量。':'上面要报亩产和产量。隔壁公社报了亩产万斤，你们单位的指标一加再加，开会时没人敢说做不到。'; },
+  opts:function(c){ return [
+   {t:'跟着报高数',d:'',run:function(){ FX({sup:6,trust:3}); FLAG('false_report','大跃进时跟着虚报了产量'); return '你们的数字上了报纸。'; }},
+   {t:'如实上报',d:'',run:function(){ FX({sup:-8,trust:-4}); FLAG('honest_report','大跃进时如实上报产量'); return '会上你被批评为“观潮派”。'; }},
+   {t:'报个折中数',d:'',run:function(){ FX({sup:-2}); return '不高不低，两头都没落好。'; }}
+  ]; }});
+ EV({id:'rightdev',t:'反右倾',e:['p'],chain:'honest_report',w:8,when:function(c){ return has(c,'honest_report',60)&&c.yf>=1959.6&&c.y<=1960; },ph:'organize',
+  d:function(){ return '庐山会议之后反右倾。你当初如实上报的事被重新翻出来，说你“对三面红旗有怀疑”。'; },
+  opts:function(c){ return [
+   {t:'写检讨',d:'',run:function(){ FX({trust:-3,health:-3}); FLAG('rightdev','1959 年因如实上报被批为右倾'); DONE('honest_report','被批'); return '检讨通过了，你被调离原岗位。'; }},
+   {t:'不改口',d:'',run:function(){ FX({trust:-5,health:-4}); HOLD(720,'被批为右倾'); FLAG('rightdev','1959 年因如实上报被批为右倾'); DONE('honest_report','被批'); return '你被撤了职，下放劳动。'; }}
+  ]; }});
+ EV({id:'rehab62',t:'甄别平反',e:['p'],chain:'rightdev',w:10,when:function(c){ return has(c,'rightdev',200)&&c.y>=1961&&c.y<=1963; },ph:'office',
+  d:function(){ return '七千人大会以后，各地开始对“反右倾”中处理错了的干部进行甄别。组织上找你谈话，说当年的结论要改。'; },
+  opts:function(c){ return [
+   {t:'接受甄别结论',d:'',run:function(){ DONE('rightdev','平反'); UNHOLD(); FX({trust:6,fame:3}); POL(1); return '结论改了，你恢复了原职。有人私下说，当年就你说了实话。'; }},
+   {t:'要求公开说明',d:'',run:function(){ DONE('rightdev','平反'); UNHOLD(); FX({trust:3,fame:5,sup:-3}); return '支部大会上宣读了平反决定。'; }}
+  ]; }});
+ EV({id:'quota60',t:'征购任务',e:['p'],chain:'false_report',w:6,when:function(c){ return has(c,'false_report',120)&&c.y>=1959&&c.y<=1961; },ph:'disaster',
+  d:function(){ return '征购任务是按去年报上去的产量定的。粮食交上去，社员的口粮就不够了，食堂的稀饭越来越稀，有人得了浮肿病。'; },
+  opts:function(c){ return [
+   {t:'向上反映实情',d:'要承担后果。',run:function(){ DONE('false_report','反映'); FX({sup:-5,fame:3,trust:-2}); return '你的报告被压了两个月，后来征购数减了一些。'; }},
+   {t:'照征不误',d:'',run:function(){ DONE('false_report','照征'); FX({fame:-4,trust:2}); FLAG('quota_guilt','困难时期按虚报的数字完成征购'); return '任务完成了。那个冬天，村里少了好些人。'; }},
+   {t:'暗中给队里留些口粮',d:'被查出来要挨批。',run:function(){ DONE('false_report','留粮'); if(R()<0.35){ FX({trust:-6,health:-3}); POL(-1); return '“瞒产私分”被查了出来。'; } FX({fame:2}); return '队里熬过了春荒。'; }}
+  ]; }});
+ /* 28 口粮紧张 */
+ EV({id:'hunger60',t:'口粮紧张',e:['p'],y:[1959,1961],rep:300,w:1.4,ph:'disaster',when:function(c){ return c.prc; },
+  d:function(){ return '粮食定量一降再降，副食品几乎断了供应。家里有人腿肿得一按一个坑，大夫说是营养不良。'; },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:'托人买高价粮',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,health:-1}); return '买到二十斤，一家人省着吃了一个月。'; }},
+   {t:'挖野菜、做“代食品”',d:'',run:function(){ FX({health:-rint(4,8)}); return '榆树皮、谷糠、小球藻，能吃的都吃过了。'; }},
+   {t:'把口粮匀给家里人',d:'',run:function(){ FX({health:-rint(8,12),fame:1}); return '你瘦得脱了相，孩子们没断顿。'; }}
+  ]; }});
+ /* 29 大字报 */
+ EV({id:'dazibao',t:'大字报',e:['p'],pk:[['cultural66',1966,1968]],y:[1966,1968],rep:400,w:function(c){ return 1+Math.max(0,-c.pol)/2+(ever(c,'informer')?1:0); },ph:'organize',when:function(c){ return c.prc&&!c.top; },
+  d:function(c){ var why=[]; if(c.S.label) why.push('“'+c.S.label+'”的出身'); if(ever(c,'comprador')) why.push('在洋行的旧事'); if(ever(c,'overseas_kin')) why.push('海外关系'); if(ever(c,'collab')) why.push('沦陷时期的事'); if(ever(c,'hid_history')) why.push('“隐瞒历史”'); if(ever(c,'informer')) why.push('当年被你检举过的人的家属作证');
+   c.bad=Math.max(0,-c.pol); return '一夜之间，单位门口贴出了点你名字的大字报，'+(why.length?'揭的是'+why.slice(0,2).join('、')+'。':'说你是“走资派的黑爪牙”。')+'第二天就要开会。'; },
+  opts:function(c){ var k=1+c.bad/3; return [
+   {t:'写检查',d:'',run:function(){ FX({fame:-3,health:-Math.round(3*k)}); if(c.bad>=3){ WANT(180,'被隔离审查'); return '检查写了一遍又一遍，你被关进“牛棚”隔离审查。'; } return '检查贴在大字报旁边。'; }},
+   {t:'找老关系说情',d:'',need:need(!!netShield(),'没有肯为你出面的人（需有人庇护）'),run:function(){ var sh=netShield(); netRemember(sh,'运动中替你说话'); if(R()<0.5) return sh+'说了话，会没开成。'; FX({health:-Math.round(4*k)}); netRelAdd(sh,-5,'替你说话受了牵连'); return sh+'自己也被贴了大字报。'; }},
+   {t:'贴大字报反驳',d:'',run:function(){ if(R()<0.4){ FX({fame:1}); return '两边打起了笔仗，事情不了了之。'; } FX({health:-Math.round(6*k),fame:-4}); POL(-1); return '你被拉去批斗，挂着牌子站了一下午。'; }}
+  ]; }});
+ /* 30 上山下乡 */
+ EV({id:'sendown',t:'孩子下乡',e:['p'],y:[1968,1971],once:1,w:2,ph:'work',when:function(c){ return c.prc&&c.age>=38&&c.age<=66; },
+  d:function(){ return '“知识青年到农村去”。孩子中学毕业，学校动员到黑龙江的兵团或者陕北插队，街道干部已经上门两次了。'; },
+  opts:function(c){ var a=amt(c,1,0.6); return [
+   {t:'送孩子下乡',d:'置办行装 '+M(a)+'。',run:function(){ FX({cash:-a,trust:2}); return '火车站上哭成一片。'; }},
+   {t:'托关系让孩子参军或进厂',d:'',need:need(c.sup>=65||!!netShield(),'没有门路（需上司关系 ≥65 或有人庇护）'),run:function(){ if(R()<0.6) return '孩子穿上了军装。'; FX({sup:-3}); return '门路没走通，孩子还是去了农村。'; }}
+  ]; }});
+ /* 31 丢了粮票 */
+ EV({id:'coupon',t:'丢了粮票',e:['p'],y:[1955,1972],rep:1500,ph:'debt',when:function(c){ return c.prc&&!c.top; },
+  d:function(){ return '月初刚领的全国粮票和本月的油票，连同钱包一起在电车上被偷了。粮票丢了不补。'; },
+  opts:function(c){ return [
+   {t:'向单位申请困难补助',d:'',run:function(){ FX({cash:amt(c,0.2),trust:-1}); return '工会批了一点补助。'; }},
+   {t:'向邻居借',d:'',run:function(){ var n=NPC('tongxiang','邻居'); FX({npc:[n,5,'借粮票给你']}); return n+'匀了你几斤。'; }},
+   {t:'勒紧裤腰带',d:'',run:function(){ FX({health:-3}); return '一个月里，你中午只吃一个窝头。'; }}
+  ]; }});
+ /* 32 家眷去留（1949） */
+ EV({id:'leave49',t:'去留',e:['w'],once:1,w:3,ph:'disaster',when:function(c){ return c.yf>=1948.9&&c.yf<1949.7&&!c.top&&c.fac!=='cpc'&&(c.rank>=2||c.cash>=c.K*20); },
+  d:function(c){ return (c.yf<1949.25?'辽沈、淮海、平津三大战役打完，南京政府败局已定。':'解放军已经渡过长江。')+c.city+'的码头和机场挤满了人，一张船票、机票的价钱一天一变。亲戚来问：走不走？'; },
+  opts:function(c){ var a=amt(c,6,3); return [
+   {t:'把家眷送去香港或台湾',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a}); POL(-2); FLAG('overseas_kin','1949 年把家眷送去了海外'); return '码头上，你看着船开远了。'; }},
+   {t:'全家留下',d:'',run:function(){ POL(1); return '你把行李又搬回了屋里。'; }}
+  ]; }});
+ /* ---------- 民国与晚清 ---------- */
+ /* 33 旧友被捕 */
+ EV({id:'friend_jail',t:'旧友被捕',e:['r','w'],y:[1927,1949],rep:2000,ph:'arrest',when:function(c){ return !c.top&&!c.prc; },
+  d:function(c){ c.n=NPC('comrade','老同学'); c.cpc=c.y<=1937||c.yf>=1946?(R()<0.7):R()<0.4; return '老同学'+c.n+'被抓了，'+(c.occ?'是日本宪兵队抓的':(c.cpc?'罪名是“共党嫌疑”':'说是“扰乱治安”'))+'。他家里人来求你，说你认识的人多。'; },
+  opts:function(c){ var a=amt(c,5,3); return [
+   {t:'出钱营救',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,npc:[c.n,30,'你出钱救他出狱']}); if(c.cpc) POL(2); FLAG('saved_friend','出钱营救了'+c.n,{n:c.n,cpc:!!c.cpc}); return '人保出来了，瘦了一圈。他握着你的手，什么都没说。'; }},
+   {t:'托关系保释',d:'',need:need(c.sup>=60||!!netShield(),'没有说得上话的人（需上司关系 ≥60 或有人庇护）'),run:function(){ if(R()<0.5){ FX({npc:[c.n,25,'你托人保他出狱']}); if(c.cpc) POL(1); FLAG('saved_friend','托关系保出了'+c.n,{n:c.n,cpc:!!c.cpc}); return '关系托到了，人放了。'; } FX({sup:-3}); return '对方说这案子上面盯着，谁也不敢放。'; }},
+   {t:'撇清关系',d:'',run:function(){ FX({npc:[c.n,-30,'出事时你撇清关系']}); return '你让门房说你不在家。'; }}
+  ]; }});
+ EV({id:'friend_back',t:'故人来访',e:['p','w'],chain:'saved_friend',w:5,when:function(c){ var f=c.F.saved_friend; return has(c,'saved_friend',360)&&((c.prc&&c.y<=1960&&f.cpc)||(!c.prc&&c.y>=1945)); },ph:'visit',
+  d:function(c){ var f=c.F.saved_friend; c.n=f.n; return c.prc?(f.n+'坐着吉普车来了。他如今是市里一个局的负责人，说当年要不是你，他早没命了。'):(f.n+'辗转托人带来一封信，说他如今在后方做事，你有难处尽管开口。'); },
+  opts:function(c){ return [
+   {t:'叙旧',d:'',run:function(){ DONE('saved_friend','重逢'); FX({npc:[c.n,15,'旧友重逢'],trust:c.prc?3:0,power:1}); if(c.prc) POL(2); var p=netP(c.n); if(p.can.indexOf('protect')<0) p.can.push('protect'); p.lv=Math.max(p.lv||0,4); return '他临走说：以后有事，找我。'; }},
+   {t:'不去攀附',d:'',run:function(){ DONE('saved_friend','重逢'); FX({fame:1}); if(c.prc) POL(1); return '你只请他吃了顿便饭。'; }}
+  ]; }});
+ /* 34 应酬吸鸦片 */
+ EV({id:'opium',t:'烟榻应酬',e:['q','r'],y:[1840,1935],rep:2000,ph:'befriend',when:function(c){ return (c.off||c.mil||c.biz)&&c.rank>=1&&!has(c,'opium',0)&&!c.top; },
+  d:function(c){ return c.supT+'请客，饭后众人移到烟榻上。烟枪递到你手里，满屋的人都看着。'; },
+  opts:function(c){ return [
+   {t:'陪着抽两口',d:'',run:function(){ FX({sup:4}); if(R()<0.45){ FLAG('opium','染上了烟瘾'); return '你抽了第一口，后来就离不开了。'; } return '你只是应个景。'; }},
+   {t:'推说身体不好',d:'',run:function(){ FX({sup:-2}); return c.supT+'哼了一声。'; }}
+  ]; }});
+ EV({id:'opium_quit',t:'烟瘾',e:['q','r','w'],chain:'opium',w:5,when:function(c){ return has(c,'opium',300); },ph:'rest',
+  d:function(){ return '烟瘾一天比一天大，每天的烟钱不是小数，人也瘦得只剩一把骨头。家里人哭着求你戒。'; },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:'下决心戒',d:'进戒烟所，花 '+M(a)+'。',run:function(){ DONE('opium','戒除'); FX({cash:-a,health:-6}); return '熬了一个月，戒掉了。'; }},
+   {t:'接着抽',d:'',run:function(){ FX({cash:-amt(c,1),health:-4}); return '你又躺回了烟榻。'; }}
+  ]; }});
+ /* 35 会党拉入伙 */
+ EV({id:'society',t:'会党拉入伙',e:['q'],y:[1880,1911],rep:2000,ph:'organize',when:function(c){ return !c.top&&!(c.off&&c.rank>=3)&&!ever(c,'society'); },
+  d:function(){ return '茶馆里一个面熟的汉子拉你到后院，说他们的山堂讲义气、有照应，问你愿不愿意“拜码头”入伙。你听说他们和革命党也有来往。'; },
+  opts:function(c){ return [
+   {t:'入伙',d:'',run:function(){ FX({power:2}); FLAG('society','入了会党的山堂'); return '你喝了鸡血酒，领了腰牌。'; }},
+   {t:'不入，也不声张',d:'',run:function(){ return '他拍拍你的肩，说想通了再来。'; }},
+   {t:'报官',d:'',run:function(){ FX({sup:5,fame:-2}); return '官兵抄了那座山堂。茶馆里再没人跟你说话。'; }}
+  ]; }});
+ EV({id:'society_back',t:'山堂旧事',e:['q','r'],chain:'society',w:5,when:function(c){ return has(c,'society',180); },ph:'arrest',
+  d:function(c){ return c.y<1912?'官府搜捕会党，有人供出了名册，你的名字在上面。':'辛亥年起事，山堂里不少兄弟跟着革命军打了仗，如今有人当上了都督府的营长，派人来找你。'; },
+  opts:function(c){ if(c.y>=1912) return [
+   {t:'去见旧日兄弟',d:'',run:function(){ DONE('society','辛亥'); FX({power:3,fame:2,pf:4}); return '他给了你一个差事，说革命不忘旧人。'; }},
+   {t:'不再来往',d:'',run:function(){ DONE('society','辛亥'); return '你把腰牌烧了。'; }}
+  ]; var g=giftCost(Math.min(7,c.rank+2)); return [
+   {t:'逃往外地',d:'',run:function(){ DONE('society','逃'); WANT(240,'被官府缉拿'); FX({cash:-amt(c,1.5)}); return '你当夜出了城。'; }},
+   {t:'花钱买通捕快',d:M(g)+'。',need:needCash(c,g),run:function(){ DONE('society','买通'); FX({cash:-g}); return R()<0.65?'名册上你那一页被撕了。':'钱收了，人还是来了，你又花了一笔才脱身。'; }}
+  ]; }});
+ /* 36 藏匿革命党 */
+ EV({id:'hide_rev',t:'深夜叩门',e:['q'],y:[1903,1911],once:1,w:1.5,ph:'visit',when:function(c){ return !c.top; },
+  d:function(){ return '深夜，一个剪了辫子的年轻人翻墙进来，说他是从日本回来的革命党，起事失败，官兵正在满城搜捕，求你藏他几天。'; },
+  opts:function(c){ var o=[
+   {t:'藏在后院夹墙里',d:'被搜出来是灭门的罪。',run:function(){ POL(1); FX({pf:-2}); FLAG('hid_rev','辛亥前藏匿过革命党人'); return '你把他藏了五天，第六天夜里送上了去上海的船。'; }},
+   {t:'给盘缠送他走',d:M(amt(c,1))+'。',run:function(){ FX({cash:-amt(c,1)}); return '他拿了钱，从后门走了。'; }},
+   {t:'拒之门外',d:'',run:function(){ return '你把门关上，听见巷子里有人在跑。'; }}];
+   if(c.off||c.mil) o.push({t:'报官',d:'',run:function(){ FX({sup:6,trust:3,fame:-2}); return '他在城门口被抓住，三天后问斩。'; }});
+   return o; }});
+ EV({id:'hidrev_back',t:'革命党人的下落',e:['q','r'],chain:'hid_rev',w:6,when:function(c){ return has(c,'hid_rev',120); },ph:'organize',
+  d:function(c){ if(c.y<1912){ c.bad=true; return '那个革命党人在上海被捕，供词里提到了你。巡防营的人已经到了巷口。'; } return '民国了。你当年藏过的那个年轻人，如今是'+(c.fac==='beiyang'?'北京政府':'南方')+'的要人，派人送来名帖，请你去做事。'; },
+  opts:function(c){ if(c.bad) return [
+   {t:'从后门逃走',d:'',run:function(){ DONE('hid_rev','事发'); WANT(365,'被官府缉拿'); FX({health:-6}); return '你翻墙逃了，家里被抄。'; }},
+   {t:'咬定不认识',d:'',run:function(){ DONE('hid_rev','事发'); if(R()<0.5){ FX({health:-12,cash:-amt(c,3)}); return '你被关了半年，家里花钱才赎出来。'; } return '供词对不上，他们走了。'; }}
+  ]; return [
+   {t:'去投奔他',d:'',run:function(){ DONE('hid_rev','举荐'); FX({fame:4,power:3,pf:6}); return '他在众人面前讲了那五天的事。'; }},
+   {t:'谢绝',d:'',run:function(){ DONE('hid_rev','举荐'); FX({fame:2}); return '你回信说，那是该做的事。'; }}
+  ]; }});
+ /* 37 吃空饷 */
+ EV({id:'ghost_pay',t:'空额饷银',e:['q','r','w'],rep:1500,ph:'drill',when:function(c){ return c.role==='officer'&&c.rank>=1&&c.rank<=5&&c.fac!=='cpc'&&!c.top; },
+  d:function(){ return '营里的兵额册上有几十个名字早就不在了——有的逃了，有的死了。管带说照规矩，空额的饷大家分，这个月你那份已经包好了。'; },
+  opts:function(c){ return [
+   {t:'照规矩收下',d:'',run:function(){ FX({cash:amt(c,4,2),sup:3}); FLAG('ghost_pay','分过营里空额的饷银'); return '你把纸包揣进了怀里。'; }},
+   {t:'推掉',d:'',run:function(){ FX({sup:-6,fame:1}); return '管带看了你一眼，说你清高。'; }}
+  ]; }});
+ EV({id:'ghost_inspect',t:'上峰点验',e:['q','r','w'],chain:'ghost_pay',w:5,when:function(c){ return has(c,'ghost_pay',150); },ph:'drill',
+  d:function(){ return '上峰派员来点验兵额，三天后到。册上的数和营里的人差了一大截。'; },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:'临时雇人充数',d:'街上雇苦力穿号衣，'+M(a)+'。',run:function(){ DONE('ghost_pay','充数'); FX({cash:-a}); if(R()<0.7) return '点验官数完人头就走了。'; FX({trust:-5}); HOLD(360,'点验舞弊'); return '有个苦力连枪都不会拿，被当场识破。'; }},
+   {t:'如实报缺额',d:'',run:function(){ DONE('ghost_pay','如实'); FX({trust:-2,sup:-10,fame:2}); HOLD(240,'所部缺额被查'); return '管带被撤了，你也挨了记过。'; }}
+  ]; }});
+ /* 38 开小差 */
+ EV({id:'deserter',t:'开小差',e:['q','r','w'],rep:1200,ph:'drill',when:function(c){ return c.mil&&c.rank<=2&&!c.top; },
+  d:function(){ return '同棚的弟兄夜里摸到你铺边，说饷欠了三个月，家里老娘快饿死了，今晚他要走，求你替他望风。'; },
+  opts:function(c){ return [
+   {t:'替他望风',d:'',run:function(){ var n=NPC('military','同棚弟兄'); FX({npc:[n,25,'你替他望风']}); if(R()<0.25){ FX({trust:-6,health:-6}); return '他走了，你被查出来，挨了二十军棍。'; } return '他翻过营墙，再没回来。'; }},
+   {t:'报告长官',d:'',run:function(){ var n=NPC('military','同棚弟兄'); FX({sup:4,trust:2,npc:[n,-40,'你告发他开小差']}); netGrudge(n); return '他被绑了回来，当众挨了打。弟兄们看你的眼神变了。'; }},
+   {t:'装睡',d:'',run:function(){ return '天亮时，他的铺空了。'; }}
+  ]; }});
+ /* 39 灾年囤粮 */
+ EV({id:'hoard',t:'灾年米价',e:['q','r','w'],rep:1500,ph:'earn',when:function(c){ return c.biz&&c.rank>=1&&c.cash>=c.K*6&&!c.top; },
+  d:function(){ return '收成不好，米价一天一个样。同行都在囤，说再等一个月，价钱还能翻一倍。门外已经有人在抢米。'; },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:'囤积待价',d:'',run:function(){ FX({cash:amt(c,6,3),fame:-4}); POL(-2); FLAG('hoarder','灾年囤积粮食'); return '你赚了一笔。米店的门板被人砸了两回。'; }},
+   {t:'平价出粜',d:'',run:function(){ FX({cash:amt(c,1,0.5),fame:4}); return '排队的人从街头排到街尾。'; }},
+   {t:'捐一部分开粥厂',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,fame:5}); return '粥厂开了一个月。'; }}
+  ]; }});
+ /* 40 工潮 */
+ EV({id:'strike',t:'工潮',e:['r','w'],rep:1500,ph:'organize',when:function(c){ return c.biz&&c.rank>=2&&!c.prc&&((c.y>=1919&&c.y<=1936)||(c.y>=1946&&c.y<=1948)); },
+  d:function(){ return '厂里的工人停了工，堵在门口，要求加工钱、减工时、不许随便开除人。带头的几个是工会的人。'; },
+  opts:function(c){ var a=amt(c,3,2); return [
+   {t:'答应加工钱',d:'每月多出 '+M(a)+' 上下。',run:function(){ FX({cash:-a,fame:2}); return '第二天机器转了起来。'; }},
+   {t:'开除带头的',d:'',run:function(){ FX({fame:-2}); POL(-1); FLAG('crushed_strike','工潮中开除了带头的工人'); return '几个人被赶出厂门，剩下的复了工。'; }},
+   {t:'请军警弹压',d:'',run:function(){ FX({fame:-4,sup:2}); POL(-2); FLAG('crushed_strike','请军警弹压过工潮'); return '警察开了枪，有人倒在厂门口。'; }}
+  ]; }});
+ /* 41 媒人说亲 */
+ EV({id:'marriage',t:'媒人说亲',e:['q','r','w','p'],once:1,w:1.3,ph:'visit',when:function(c){ return c.age>=17&&c.age<=28&&!c.top; },
+  d:function(c){ return c.e==='p'?'单位的老大姐给你介绍对象，是厂里的技术员，人老实，家里成分好。':'媒人上门，说城东一户人家的姑娘知书达理，八字也合，女方家里在地方上有些脸面。'; },
+  opts:function(c){ var a=c.e==='p'?amt(c,1,0.5):amt(c,4,2); return [
+   {t:'应下这门亲',d:(c.e==='p'?'办几桌喜酒':'聘礼酒席')+'约 '+M(a)+'。',need:needCash(c,a),run:function(){ var n=NPC('gentry',c.e==='p'?'岳父':'岳丈'); s.rel[n]=72; FX({cash:-a,fame:1,npc:[n,8,'结了亲家']}); return '喜事办得热热闹闹。'; }},
+   {t:'先缓一缓',d:'',run:function(){ return '媒人说，好姑娘不等人。'; }}
+  ]; }});
+ /* 42 赌局 */
+ EV({id:'gamble',t:'牌局',e:['q','r'],rep:900,ph:'gossip',when:function(c){ return !c.top&&c.cash>=c.K; },
+  d:function(){ return '几个熟人拉你去打牌，说今晚的局大，有个外乡来的阔少带了不少现钱。'; },
+  opts:function(c){ var a=amt(c,1.5,0.6); return [
+   {t:'下场',d:'带 '+M(a)+' 去。',need:needCash(c,a),run:function(){ var r=R(); if(r<0.35){ FX({cash:a}); return '手气好，翻了一倍。'; } if(r<0.55) return '输赢相抵。'; FX({cash:-a}); return '天亮时，你口袋空了。那个阔少和庄家是一伙的。'; }},
+   {t:'不去',d:'',run:function(){ return '你早早睡了。'; }}
+  ]; }});
+ /* 43 邻家失火 */
+ EV({id:'fire',t:'邻家失火',e:['q','r','w','p'],rep:1500,ph:'disaster',when:notTop,
+  d:function(c){ return '半夜锣声大作，隔壁着了火，火舌已经舔到你家的山墙。'+(c.e==='p'?'消防队还没到。':'水龙会的人还没来。'); },
+  opts:function(c){ return [
+   {t:'冲过去救火',d:'',run:function(){ FX({fame:2}); if(R()<0.4) FX({health:-rint(5,12)}); return '火灭了，你的眉毛烧掉一半。'; }},
+   {t:'先抢搬自家东西',d:'',run:function(){ FX({fame:-1}); if(R()<0.3){ FX({cash:-amt(c,1)}); return '东西没抢完，后屋还是烧了。'; } return '你家的东西都搬出来了。'; }}
+  ]; }});
+ /* 44 教案 */
+ EV({id:'jiaoan',t:'民教冲突',e:['q'],y:[1861,1900],rep:2000,ph:'office',when:function(c){ return (c.off&&c.rank>=1)||c.org==='乡绅家庭'; },
+  d:function(){ return '城外村子里，乡民和教民为争水打了起来，教堂被烧了半边。传教士已经去找领事，领事照会到了衙门。'; },
+  opts:function(c){ return [
+   {t:'弹压乡民',d:'抓人赔款，息事宁人。',run:function(){ FX({sup:4,fame:-4}); return '抓了几个带头的，赔了教堂银子。乡下人骂你是“二毛子”。'; }},
+   {t:'偏袒乡民',d:'',run:function(){ FX({fame:4,sup:-6}); if(R()<0.5) HOLD(240,'教案处置不力，被总理衙门申饬'); return '领事又发了一道照会。'; }},
+   {t:'两边调停',d:'',need:need(c.skill>=35,'能力不足 35，压不住场面'),run:function(){ FX({fame:1,skill:1}); return '各打五十大板，暂时压住了。'; }}
+  ]; }});
+ /* 45 科场关节 */
+ EV({id:'exam',t:'科场关节',e:['q'],y:[1840,1904],rep:2000,ph:'study',when:function(c){ return (c.stu||c.off||c.lit)&&!c.top; },
+  d:function(){ return '乡试将近。一个书吏悄悄找你，说他认识房官，可以“通关节”——试卷上约好几个字，保准取中。也有人托你替考，报酬很丰厚。'; },
+  opts:function(c){ var a=amt(c,4,2); return [
+   {t:'替人做枪手',d:'事发是要杀头的。',run:function(){ if(R()<0.2){ FX({fame:-6,health:-8}); WANT(240,'科场案被缉'); return (c.y>1858?'咸丰八年戊午科场案，连主考的大学士都被斩了。这回又有人被拿，':'科场舞弊是要杀头的。这回有人被拿，')+'你连夜出逃。'; } FX({cash:a}); return '报酬到手，你一夜没睡着。'; }},
+   {t:'拒绝，不声张',d:'',run:function(){ return '书吏笑笑走了。'; }},
+   {t:'告发',d:'',run:function(){ FX({fame:2,sup:2}); return '那书吏被拿下。'; }}
+  ]; }});
+ /* 46 债主上门 */
+ EV({id:'creditor',t:'债主上门',e:['q','r','w','p'],rep:600,w:2,ph:'debt',when:function(c){ return c.debt>c.K*2&&!c.top; },
+  d:function(c){ return '年关将近，债主带着账簿堵在门口，说欠的 '+M(c.debt)+' 今天不还，就要告官、搬东西。'; },
+  opts:function(c){ var E=econEnsure(s); var part=_r2(Math.min(E.debt,Math.max(0,c.cash))); return [
+   {t:'能还多少还多少',d:'拿出 '+M(part)+'。',need:need(part>0,'手头一文钱都没有'),run:function(){ var E2=econEnsure(s); s.cash=_r2(s.cash-part); E2.debt=_r2(E2.debt-part); line('还债 '+M(part)+'，尚欠 '+M(E2.debt)); return '债主数了钱，脸色缓和了些。'; }},
+   {t:'变卖细软',d:'衣物家什按半价出手。',run:function(){ var E2=econEnsure(s), v=_r2(Math.min(E2.debt,c.K*2)); E2.debt=_r2(E2.debt-v); FX({fame:-1}); line('变卖抵债 '+M(v)+'，尚欠 '+M(E2.debt)); return '当铺的朝奉压了价，你没争。'; }},
+   {t:'求宽限',d:'',run:function(){ if(R()<0.5) return '债主骂骂咧咧地走了，答应再宽一个月。'; FX({fame:-2,health:-2}); return '债主在门口骂了半天，邻居都出来看。'; }}
+  ]; }});
+ /* 47 家中断炊 */
+ EV({id:'broke',t:'断炊',e:['q','r','w','p'],rep:700,w:2,ph:'loan',when:function(c){ return c.cash<c.K*0.6&&!c.top; },
+  d:function(c){ return '米缸见了底，'+(c.e==='p'?'粮本上的定量还没到日子领。':'当铺的票子已经攒了一沓。')+'孩子饿得直哭。'; },
+  opts:function(c){ var a=amt(c,0.8,0.3); return [
+   {t:c.e==='p'?'向工会借支':'典当冬衣',d:'换 '+M(a)+'。',run:function(){ FX({cash:a,health:c.e==='p'?0:-1}); return c.e==='p'?'借到一点，下月从工资里扣。':'入冬以后，你只能穿两件单衣。'; }},
+   {t:'去码头扛活',d:'',run:function(){ FX({cash:amt(c,0.5,0.2),health:-rint(3,6)}); return '扛了十天大包，肩膀磨烂了。'; }},
+   {t:'向同乡借',d:'',run:function(){ var n=NPC('tongxiang','同乡'); FX({cash:a,npc:[n,-3,'借钱给你']}); var E=econEnsure(s); E.loans=E.loans||[]; E.loans.push({from:n,amt:a,rate:0.02,due:s.cal.ord+180}); return n+'借了钱给你，说半年后还。'; }}
+  ]; }});
+ /* 48 剪辫 */
+ EV({id:'queue',t:'剪辫',e:['r'],y:[1912,1913],once:1,w:3,ph:'gossip',when:notTop,
+  d:function(){ return '民国了。街口有人拿着剪刀守着，见到留辫子的就剪。家里老人说辫子剪了没脸见祖宗。'; },
+  opts:function(c){ return [
+   {t:'剪了',d:'',run:function(){ FX({fame:1}); return '头上一轻，风灌进了后脖颈。'; }},
+   {t:'先盘起来藏在帽子里',d:'',run:function(){ return '你戴着瓜皮帽，观望了一年。'; }}
+  ]; }});
+ /* 49 催征钱粮 */
+ EV({id:'tax',t:'催征钱粮',e:['q','r'],rep:1100,ph:'office',when:function(c){ return c.off&&c.rank>=1&&c.rank<=4&&!c.top; },
+  d:function(c){ return '上头催解钱粮，说'+(c.e==='q'?'藩库':'省库')+'已经空了，限期解足。今年乡下收成不好，照额征收，已经有人卖儿卖女。'; },
+  opts:function(c){ return [
+   {t:'加征火耗',d:'多征一成，填补亏空，余下归己。',run:function(){ FX({cash:amt(c,3,1.5),sup:4,fame:-4}); return '钱粮解足了，乡下的告状纸也到了府里。'; }},
+   {t:'照额征收',d:'',run:function(){ FX({sup:1}); return '勉强解足了。'; }},
+   {t:'禀请缓征',d:'',run:function(){ FX({fame:4,sup:-6,trust:-2}); if(R()<0.4) HOLD(180,'禀请缓征，忤了上意'); return '禀帖递上去，回批是“着即照数征解”。'; }}
+  ]; }});
+ /* 50 水灾 */
+ EV({id:'flood',t:'大水',e:['q','r','w','p'],pk:[['wuhan_2',1938,1938]],rep:1500,ph:'disaster',
+  w:function(c){ var y=c.y; return (y===1931&&c.reg==='湘鄂')||(y===1938&&c.reg!=='关外')||(y===1954&&c.reg==='湘鄂')||(y>=1841&&y<=1843)||(y>=1887&&y<=1888)?3:0.35; },
+  when:function(c){ return c.m>=6&&c.m<=9; },
+  d:function(c){ var y=c.y; return y===1931?'长江、汉水一齐漫堤，汉口泡在水里一个多月，街上行船，尸首漂在水面。'
+   :y===1938?'黄河花园口决了堤。豫东、皖北一片汪洋，几十万人淹死，几百万人逃荒，消息传到这里，难民已经到了城外。'
+   :y===1954?'长江大水，堤上日夜有人抢险，单位组织青壮上堤。'
+   :'连日暴雨，河堤决口，下游几个村子淹了，田里的庄稼全泡了汤。'; },
+  opts:function(c){ var a=amt(c,1.5,0.8); return [
+   {t:c.e==='p'?'报名上堤抢险':'上堤抢险',d:'',run:function(){ FX({fame:3,health:-rint(3,9)}); if(c.e==='p') FX({trust:2}); return '在堤上泡了七天七夜。'; }},
+   {t:'捐款赈灾',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a,fame:2}); return '捐款名单登了报。'; }},
+   {t:'顾好自家',d:'',run:function(){ FX({cash:-amt(c,0.5)}); return '你家的米面搬上了阁楼。'; }}
+  ]; }});
+ /* 51 亲戚借钱 */
+ EV({id:'kin_loan',t:'亲戚借钱',e:['q','r','w','p'],rep:1300,ph:'loan',when:function(c){ return !c.top&&c.cash>=c.K*1.5; },
+  d:function(c){ return c.e==='p'?'老家的表兄来信，说生产队分的口粮不够吃，孩子上学要交学费，想跟你借点钱，信写得很客气。':'表兄从乡下赶来，说家里遭了灾，佃的田交不上租，东家要收回，求你借一笔钱应急。'; },
+  opts:function(c){ var a=amt(c,1.2,0.5); return [
+   {t:'借给他',d:M(a)+'，不指望还。',need:needCash(c,a),run:function(){ var n=NPC('tongxiang','表兄'); s.rel[n]=60; FX({cash:-a,npc:[n,15,'困难时你借钱给他'],fame:1}); return '他把借据硬塞给你，你没收。'; }},
+   {t:'借一半',d:M(_r2(a/2))+'。',need:needCash(c,_r2(a/2)),run:function(){ FX({cash:-_r2(a/2)}); return '他道了谢，脸色不太好看。'; }},
+   {t:'推说手头也紧',d:'',run:function(){ FX({fame:-1}); return '这件事在亲戚里传开了。'; }}
+  ]; }});
+ /* 52 失窃 */
+ EV({id:'theft',t:'家中失窃',e:['q','r','w','p'],rep:1500,ph:'debt',when:function(c){ return !c.top&&c.cash>=c.K; },
+  d:function(c){ return '夜里有人撬了'+(c.e==='p'?'门锁':'后窗')+'，箱子里的'+(c.e==='p'?'现金和手表':'银钱和几件皮货')+'不见了。'; },
+  opts:function(c){ var lose=_r2(Math.min(c.cash*0.2,c.K*4)); return [
+   {t:c.e==='p'?'报派出所':'报官',d:'',run:function(){ FX({cash:-lose,debt:false}); if(R()<0.3){ FX({cash:_r2(lose*0.6)}); return '贼抓住了，追回一部分。'; } return '录了口供，再无下文。'; }},
+   {t:c.e==='p'?'请街坊帮着留意':'托地面上的人打听',d:'',run:function(){ FX({cash:-lose,debt:false}); if(R()<0.45){ FX({cash:_r2(lose*0.5)}); return '东西在旧货摊上露了面，赎回来一些。'; } return '打听了半个月，没有消息。'; }}
+  ]; }});
+ /* 53 孩子生病 */
+ EV({id:'child_ill',t:'孩子高烧',e:['q','r','w','p'],rep:1500,ph:'rest',when:function(c){ return !c.top&&c.age>=25&&c.age<=50; },
+  d:function(c){ return c.e==='p'?'小儿子高烧不退，出了一身红疹，街道卫生所说怕是麻疹并发肺炎，要送大医院。':(c.e==='q'?'小儿子发热出痘，村里已经有两个孩子没了。':'小儿子高烧抽搐，西医说是脑膜炎，要打针，药是外国来的，很贵。'); },
+  opts:function(c){ var a=amt(c,2,1); return [
+   {t:c.e==='q'?'请痘医、求种痘':'送医院',d:M(a)+'。',need:needCash(c,a),run:function(){ FX({cash:-a}); return R()<0.8?'孩子挺过来了。':'孩子没能留住。'; }},
+   {t:'在家守着，用土方',d:'',run:function(){ FX({health:-2}); return R()<0.55?'熬了七天，烧退了。':'孩子没能留住。你在床边坐了一夜。'; }}
+  ]; }});
+ /* 54 统购统销 */
+ EV({id:'tonggou',t:'统购统销',e:['p'],y:[1953,1955],once:1,w:2,ph:'earn',when:function(c){ return c.prc&&!c.top; },
+  d:function(c){ return c.biz?'粮食统购统销，私营粮商不许再自由买卖，你的米店只能代国家收购、按计划供应。':'粮食统购统销开始了，城里凭证供应，乡下按“余粮户”摊派交售任务。家里人来信说，余粮任务定得太高。'; },
+  opts:function(c){ return [
+   {t:c.biz?'接受代购代销':'照规定办',d:'',run:function(){ FX({trust:2}); return c.biz?'铺子成了国家粮店的代销点。':'你回信劝家里按任务交。'; }},
+   {t:c.biz?'私下照旧买卖':'帮家里写信反映',d:'',run:function(){ if(c.biz){ if(R()<0.4){ FX({cash:-amt(c,3),fame:-2}); POL(-1); return '被查出“私商套购”，罚款没收。'; } FX({cash:amt(c,1)}); return '偷偷做了几笔。'; } FX({trust:-1}); return R()<0.5?'信转到县里，任务减了一些。':'信转回乡里，家里人被叫去谈话。'; }}
+  ]; }});
+ /* 55 单位分房 */
+ EV({id:'housing',t:'单位分房',e:['p'],y:[1953,1966],rep:2500,ph:'office',when:function(c){ return c.prc&&!c.top&&(c.off||c.mil||c.lit||c.biz)&&c.age>=24; },
+  d:function(){ return '单位盖了一栋新宿舍楼，按工龄、职务、人口打分分房。名单还没公布，几家已经在私下找领导了。'; },
+  opts:function(c){ return [
+   {t:'按规定等分配',d:'',run:function(){ if(R()<0.4){ FX({fame:1}); return '分到一间朝北的房子。'; } return '名单上没有你。'; }},
+   {t:'找领导反映困难',d:'',need:need(c.sup>=55,'与领导关系不足 55，说不上话'),run:function(){ FX({sup:-2}); return R()<0.6?'第二批名单上有了你。':'领导说要“发扬风格”。'; }},
+   {t:'让给更困难的同事',d:'',run:function(){ FX({fame:3,trust:1}); return '同事一家五口终于从一间小屋里搬了出来。'; }}
+  ]; }});
+ /* 56 夜校 */
+ EV({id:'nightschool',t:'扫盲夜校',e:['p'],y:[1950,1958],rep:2500,ph:'study',when:function(c){ return c.prc&&!c.top&&(c.lit||c.skill>=35); },
+  d:function(){ return '街道办扫盲夜校，缺识字的人当教员，没有报酬。来上课的有拉车的、做女工的，还有六十多岁的老太太。'; },
+  opts:function(c){ return [
+   {t:'去当义务教员',d:'每周三个晚上。',run:function(){ FX({fame:2,trust:1,health:-1}); return '一个冬天下来，班上有十几个人能写自己的名字了。'; }},
+   {t:'推说工作忙',d:'',run:function(){ return '居委会主任没再来。'; }}
+  ]; }});
+ /* 57 四清 */
+ EV({id:'siqing',t:'四清工作队',e:['p'],y:[1964,1966],once:1,w:2,ph:'office',when:function(c){ return c.prc&&!c.top&&(c.off||c.biz||c.mil); },
+  d:function(){ return '“四清”工作队进驻，清账目、清仓库、清财物、清工分，把几年来的账一笔笔翻出来，要每个经手人说清楚。'; },
+  opts:function(c){ return [
+   {t:'把账交出来逐笔核对',d:'',run:function(){ if(R()<0.75){ FX({trust:2}); return '账目清楚，工作队没再找你。'; } FX({trust:-3,cash:-amt(c,1)}); return '有几笔说不清的招待费，让你退赔。'; }},
+   {t:'先把几笔糊涂账抹平',d:'',run:function(){ if(R()<0.4){ FX({trust:-6,fame:-3}); POL(-1); HOLD(360,'四清中被查出问题'); return '抹账的事被会计揭了出来。'; } return '过了关，心里一直不踏实。'; }}
+  ]; }});
+ /* 58 武斗 */
+ EV({id:'wudou',t:'武斗',e:['p'],y:[1967,1968],rep:400,w:1.2,ph:'organize',when:function(c){ return c.prc&&!c.top; },
+  d:function(){ return '两派群众组织在街上打了起来，砖头、长矛，后来听说有人弄到了枪。单位停了工，两派都来拉你站队。'; },
+  opts:function(c){ return [
+   {t:'哪派都不参加',d:'',run:function(){ FX({trust:-1}); if(R()<0.2){ FX({health:-8}); return '下班路上被流弹擦伤了胳膊。'; } return '你被两派都骂作“逍遥派”。'; }},
+   {t:'跟着本单位那一派',d:'',run:function(){ if(R()<0.35){ FX({health:-rint(8,16)}); return '一次冲突里你被砖头砸破了头。'; } FX({trust:1}); return '你在据点里守了几夜。'; }},
+   {t:'回乡下躲一阵',d:'花 '+M(amt(c,1))+'。',run:function(){ FX({cash:-amt(c,1)}); return '乡下也贴满了标语，但至少没有枪声。'; }}
+  ]; }});
+ /* 59 五七干校 */
+ EV({id:'ganxiao',t:'下放干校',e:['p'],y:[1969,1971],once:1,w:2,ph:'work',when:function(c){ return c.prc&&!c.top&&(c.off||c.lit)&&c.age>=28; },
+  d:function(){ return '机关精简，大批干部和知识分子下放“五七干校”劳动。名单贴出来了，你在上面，地点在江西的一片荒滩。'; },
+  opts:function(c){ return [
+   {t:'打起铺盖去干校',d:'',run:function(){ FX({health:-5,skill:-1,trust:1}); return '你学会了插秧、喂猪、烧砖。'; }},
+   {t:'以身体为由申请缓去',d:'',need:need(hp()<60,'身体尚可（健康需低于 60 才能申请）'),run:function(){ FX({trust:-2}); return '医生开了证明，缓了半年。'; }}
+  ]; }});
+ /* ---------- 引擎：筛选、判定、弹窗 ---------- */
+ var BY={}; L.forEach(function(ev){ BY[ev.id]=ev; if(ev.rep==null) ev.rep=ev.chain?240:1200; });
+ function okEv(ev,c){
+  if(ev.e.indexOf(c.e)<0) return false;
+  if(ev.y&&(c.y<ev.y[0]||c.y>ev.y[1])) return false;
+  var last=c.S.cool[ev.id];
+  if(typeof last==='number'){ if(ev.once) return false; if(c.o-last<ev.rep) return false; }
+  if(c.e==='p'&&!ev.chain&&ev.e.length===1&&!c.prc) return false;   /* 新中国专属事件只在 1949 年后的中共胜利路线下出现 */
+  try{ if(ev.when&&!ev.when(c)) return false; }catch(e){ return false; }
+  return true;
+ }
+ function wOf(ev,c){ var w=1; try{ w=typeof ev.w==='function'?ev.w(c):(ev.w==null?1:ev.w); }catch(e){ w=1; } return (isFinite(w)&&w>0)?w:0; }
+ function eligible(c){ c=c||C(); return L.filter(function(ev){ return okEv(ev,c)&&wOf(ev,c)>0; }); }
+ function pickId(c){
+  var l=eligible(c); if(!l.length) return null;
+  var tot=0; l.forEach(function(ev){ tot+=wOf(ev,c); });
+  var r=R()*tot;
+  for(var i=0;i<l.length;i++){ r-=wOf(l[i],c); if(r<=0) return l[i].id; }
+  return l[l.length-1].id;
+ }
+ function chainDue(c){ return L.some(function(ev){ return ev.chain&&okEv(ev,c); }); }
+ /* 每月一判：定下本月哪一天来一件（天数随机），不立即决定是哪一件——到那天按当时的处境再挑 */
+ function surMonth(now){
+  if(!s||!s.cal||s.dead||s.cal.finished) return null;
+  var S=SS(); now=now||calFromOrd(s.cal.ord);
+  var mk=now.y*12+now.m; if(S.mk===mk) return null; S.mk=mk;
+  if(S.pend) return null;
+  var c=C(), p=chainDue(c)?SUR_P*1.4:SUR_P;
+  if(R()>=p) return null;
+  var day=s.cal.ord+Math.floor(R()*26);
+  if(day-S.last<SUR_GAP) day=S.last+SUR_GAP;
+  var t=calFromOrd(day); if(t.m!==now.m||t.y!==now.y) return null;
+  S.pend={o:day,mk:mk};
+  return S.pend;
+ }
+ /* 办事或静待途中不打断（留到这段日子走完、结果看过之后再弹） */
+ function busyNow(){ return !!(calBlocked()||s.cal.pendingReport||dlgQueue().length||CLOCK.settling||SP.req||SP.cur); }
+ function surFlush(){
+  if(!s||!s.cal||s.dead||s.cal.finished) return false;
+  var S=SS(); if(!S.pend||s.cal.ord<S.pend.o) return false;
+  if(busyNow()) return false;
+  var c=C(), id=S.pend.id&&BY[S.pend.id]?S.pend.id:pickId(c);
+  S.pend=null;
+  if(!id) return false;
+  return surOpen(id,c);
+ }
+ function esc(t){ return String(t==null?'':t).replace(/[&<>"']/g,function(ch){ return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]; }); }
+ /* 配图：同行动结果配图——同年代真实照片优先，不足两张用同类 AI 示意补；史料照片按年代先取 */
+ function surPhotos(ev,o){
+  var e=scEra(o), out=[];
+  var yy0=calFromOrd(o).y, pks=(ev.pk||[]).filter(function(it){ var p=PHOTOS[it[0]]; return p&&!PH.bad[p.f]&&yy0>=it[1]&&yy0<=it[2]; });   /* 史料照片：只在照片所摄的那几年用 */
+  if(pks.length) out.push(PHOTOS[one(pks)[0]]);
+  var cat=ev.ph||'gossip', mo=calFromOrd(o).m;
+  var real=SCENES.filter(function(x){ return !x.ai&&x.e===e&&x.act.indexOf(cat)>=0; });
+  var yy=calFromOrd(o).y, early=real.filter(function(x){ var m=/(\d{4})/.exec(String(x.y||'')); return !m||+m[1]<=yy+1; });   /* 同年代里优先用不晚于当年的照片 */
+  out=out.concat(scPickFrom(early,2-out.length));
+  if(out.length<2) out=out.concat(scPickFrom(real.filter(function(x){ return out.indexOf(x)<0; }),2-out.length));
+  if(out.length<2){ var ai=SCENES.filter(function(x){ return x.ai&&x.e===e&&x.act.indexOf(cat)>=0&&(!x.mo||x.mo.indexOf(mo)>=0); }); out=out.concat(scPickFrom(ai,2-out.length)); }
+  if(!out.length) out=scPickFrom(SCENES.filter(function(x){ return !x.ai&&x.e===e&&/work|earn|gossip/.test(x.act.join(',')); }),1);
+  out.forEach(function(x){ if(x.f) SC_RECENT.push(x.f); });
+  while(SC_RECENT.length>16) SC_RECENT.shift();
+  return out;
+ }
+ var OPEN=null;
+ function surOpen(id,c){
+  var ev=BY[id]; if(!ev||!s) return false;
+  c=c||C(); C0=c;
+  var desc='', opts=[];
+  try{ desc=ev.d(c); opts=ev.opts(c)||[]; }catch(e){ if(window.console) console.error(e); return false; }
+  if(!opts.length) return false;
+  var S=SS(); S.cool[id]=c.o; S.last=c.o; S.cnt=(S.cnt||0)+1; S.pend=null;
+  OPEN={id:id,c:c,opts:opts,desc:desc};
+  $('dlgTag').textContent='突发事件 · '+calFmtOrd(c.o);
+  $('dlgTitle').textContent=ev.t; $('dlgDesc').textContent=desc;
+  var body=$('dlgBody'); body.innerHTML='';
+  opts.forEach(function(o,i){
+   var why=o.need||'';
+   var b=document.createElement('button'); b.className='choice sur-opt'; b.setAttribute('data-sur',String(i));
+   b.innerHTML='<b>'+esc(o.t)+'</b>'+(o.d?'<div class="sub">'+esc(o.d)+'</div>':'')+(why?'<div class="chance sur-why">不可选：'+esc(why)+'</div>':'');
+   if(why){ b.disabled=true; b.setAttribute('aria-disabled','true'); }
+   else b.onclick=function(){ iso(function(){ surChoose(ev,o,c); }); };
+   body.appendChild(b);
+  });
+  $('mask').classList.remove('hidden');
+  try{ phObserve(); phMount(surPhotos(ev,c.o),ev.t); }catch(e){}
+  return true;
+ }
+ function fin(k){ var v=+s[k]; s[k]=isFinite(v)?clamp(v):0; }
+ function surChoose(ev,o,c){
+  if(!s) return;
+  C0=c; CUR={lines:[]};
+  var txt='';
+  try{ txt=o.run(c)||''; }catch(e){ if(window.console) console.error(e); txt='事情的走向出乎意料。'; }
+  ['skill','fame','power','trust'].forEach(fin);
+  s.health=clamp(hp(),0,100); if(!isFinite(+s.cash)) s.cash=0; s.cash=Math.max(0,_r2(s.cash));
+  var lines=CUR.lines; CUR=null; OPEN=null;
+  var S=SS(), fx=lines.filter(function(l){ return l.indexOf('伏笔：')!==0; });
+  S.log.unshift({o:c.o,id:ev.id,t:ev.t,c:o.t,r:String(txt).slice(0,80),fx:fx.join('；')});
+  if(S.log.length>80) S.log.length=80;
+  try{ log('【突发】'+ev.t+'：'+o.t+'。'+txt+(fx.length?'（'+fx.join('；')+'）':'')); }catch(e){}
+  $('dlgTag').textContent='突发事件 · 结果';
+  $('dlgDesc').textContent=txt;
+  var body=$('dlgBody'); body.innerHTML='';
+  if(lines.length){ var box=document.createElement('div'); box.className='sur-fx'; box.innerHTML=lines.map(function(l){ return '<div class="'+(l.indexOf('伏笔：')===0?'sur-seed':'sur-l')+'">'+esc(l)+'</div>'; }).join(''); body.appendChild(box); }
+  var ok=document.createElement('button'); ok.className='choice sur-ok'; ok.style.textAlign='center'; ok.innerHTML='<b>知道了</b>';
+  ok.onclick=function(){ $('mask').classList.add('hidden'); try{ persist(); }catch(e){} CLOCK.needRender=true; try{ if(window.__RENDER) window.__RENDER(); }catch(e){} };
+  body.appendChild(ok);
+  try{ persist(); }catch(e){}
+ }
+ /* ---------- 长期影响 ---------- */
+ function wantedNow(){ return !!(s&&s.surprise&&s.cal&&s.surprise.wanted>s.cal.ord); }
+ var WANT_ACT=/^(office|memorial|appoint|petition|inspect|tour|treasury|lobby|promote)$/;
+ var WANT_KEY=/^(gov:(office|memorial|appoint|petition|inspect|tour|treasury|lobby)|promote)/;
+ function wantText(){ var S=s.surprise; return (S.wantWhy||'避祸')+'，'+calFmtOrd(S.wanted)+' 前不能公开办事'; }
+ var _actGateSur=actGate;
+ actGate=function(key,label){
+  try{ if(wantedNow()&&WANT_KEY.test(String(key||''))){ calToast(wantText()); return false; } }catch(e){}
+  return _actGateSur.apply(this,arguments);
+ };
+ var _denySur=window.__actDeny;
+ window.__actDeny=function(k){
+  try{ if(wantedNow()&&WANT_ACT.test(String(k||''))) return wantText(); }catch(e){}
+  return _denySur?_denySur.apply(this,arguments):null;
+ };
+ var _tryPromoteSur=tryPromote;
+ tryPromote=function(){
+  try{ if(s&&s.surprise&&s.cal&&s.surprise.hold>s.cal.ord&&(s.rank||0)<7){ log('晋升受阻：'+(s.surprise.holdWhy||'考绩被压')+'，'+calFmtOrd(s.surprise.hold)+' 以前不得升迁。'); return; } }catch(e){}
+  return _tryPromoteSur.apply(this,arguments);
+ };
+ function surYear(){
+  if(!s||s.dead||!s.cal) return;
+  var S=SS(), c=C();
+  if(has(c,'opium',0)){ FX({health:-3,cash:-amt(c,0.5)}); log('【往事】烟瘾未断，一年的烟钱和身子都耗在烟榻上。'); }
+  if(c.prc&&c.y>=1966&&c.y<=1971&&S.pol<=-3){ FX({health:-2,trust:-2}); log('【往事】'+(S.label?'“'+S.label+'”的成分':'旧日的历史问题')+'在运动中又被翻出来，日子不好过。'); }
+  if(c.prc&&c.y>=1950&&c.y<=1957&&S.pol>=3){ FX({trust:1}); log('【往事】早年的进步履历让你在新单位里受到信任。'); }
+  s.health=clamp(hp(),0,100);
+ }
+ var _ytSur=window.__yearTick;
+ window.__yearTick=function(){ if(_ytSur) _ytSur.apply(this,arguments); try{ iso(surYear); }catch(e){ if(window.console) console.error(e); } };
+ /* ---------- 挂到日推进与弹窗流程 ---------- */
+ var _calMonthTickSur=calMonthTick;
+ calMonthTick=function(now){
+  var r=_calMonthTickSur.apply(this,arguments);
+  try{ iso(function(){ surMonth(now); }); }catch(e){ if(window.console) console.error(e); }
+  return r;
+ };
+ var _calFlushSur=calFlush;
+ calFlush=function(){
+  var r=_calFlushSur.apply(this,arguments);
+  try{ iso(surFlush); }catch(e){ if(window.console) console.error(e); }   /* 历史大事、年度报告、队列先弹；突发事件排在最后 */
+  return r;
+ };
+ window.__CAL.flush=calFlush;
+ DLGQ_OPEN.surprise=function(id){ if(!s||!BY[id]) return false; return iso(function(){ return surOpen(id,C()); }); };
+ /* ---------- 档案 / 时局：往事伏笔 ---------- */
+ TAB_TITLE['往事伏笔']='arc pol';
+ function polWord(p){ return p>=4?'早年倾向进步，履历被看重':(p>=2?'履历尚好':(p<=-5?'历史包袱沉重':(p<=-2?'有历史问题':'履历平常'))); }
+ function cardHTML(){
+  var S=SS(), o=s.cal.ord, h=[];
+  var st=[];
+  if(S.hold>o) st.push('<span class="sur-st warn">晋升受阻：'+esc(S.holdWhy)+'（至 '+calFmtOrd(S.hold)+'）</span>');
+  if(S.wanted>o) st.push('<span class="sur-st warn">'+esc(S.wantWhy)+'：不能公开办事（至 '+calFmtOrd(S.wanted)+'）</span>');
+  if(S.label) st.push('<span class="sur-st">成分 / 结论：'+esc(S.label)+'</span>');
+  if(S.cnt||S.pol) st.push('<span class="sur-st">政治履历：'+polWord(S.pol||0)+'</span>');
+  if(st.length) h.push('<div class="sur-sts">'+st.join('')+'</div>');
+  var seeds=Object.keys(S.flags).map(function(k){ return S.flags[k]; }).filter(function(f){ return f&&!f.done&&f.t; }).sort(function(a,b){ return b.o-a.o; }).slice(0,6);
+  if(seeds.length) h.push('<div class="sur-sub">未了的伏笔</div><ul class="sur-ul">'+seeds.map(function(f){ return '<li><em>'+calFmtOrd(f.o).replace(/日$/,'日')+'</em>'+esc(f.t)+'</li>'; }).join('')+'</ul>');
+  var done=Object.keys(S.flags).map(function(k){ return S.flags[k]; }).filter(function(f){ return f&&f.done&&f.t; }).sort(function(a,b){ return b.done-a.done; }).slice(0,4);
+  if(done.length) h.push('<div class="sur-sub">已应验</div><ul class="sur-ul done">'+done.map(function(f){ return '<li><em>'+calFmtOrd(f.done)+'</em>'+esc(f.t)+(f.end?' → '+esc(f.end):'')+'</li>'; }).join('')+'</ul>');
+  var rec=S.log.slice(0,5);
+  if(rec.length) h.push('<div class="sur-sub">近来的突发事件</div><ul class="sur-ul">'+rec.map(function(r){ return '<li><em>'+calFmtOrd(r.o)+'</em>'+esc(r.t)+'：'+esc(r.c)+'</li>'; }).join('')+'</ul>');
+  if(!h.length) h.push('<div class="small muted">日子还平静。突发的事、当时的选择和日后的后果会记在这里。</div>');
+  return h.join('');
+ }
+ function surCard(){
+  if(!s||!s.cal) return;
+  var lg=document.getElementById('logs'); if(!lg||!lg.closest) return;
+  var lc=lg.closest('.card'); if(!lc||!lc.parentNode) return;
+  var card=document.getElementById('cardSurprise');
+  if(!card){ card=document.createElement('div'); card.className='card'; card.id='cardSurprise'; card.innerHTML='<h2>往事伏笔</h2><div id="surBox"></div>'; lc.parentNode.insertBefore(card,lc); }
+  var box=document.getElementById('surBox'), h=cardHTML();
+  if(box&&box.getAttribute('data-h')!==h){ box.innerHTML=h; box.setAttribute('data-h',h); }
+ }
+ var _renderSur=render;
+ render=function(){ _renderSur.apply(this,arguments); try{ if(s) surCard(); }catch(e){} };
+ /* ---------- 新开局 / 读档：字段补齐（旧存档没有 s.surprise） ---------- */
+ var _initSur=init;
+ init=function(){ var r=_initSur.apply(this,arguments); if(s){ s.surprise=null; surEnsure(s); var S=s.surprise; S.last=s.cal?s.cal.ord-30:0; S.mk=s.cal?(calFromOrd(s.cal.ord).y*12+calFromOrd(s.cal.ord).m):0; } return r; };
+ var _applySaveSur=applySave;
+ applySave=function(){ var r=_applySaveSur.apply(this,arguments); try{ if(s) surEnsure(s); }catch(e){} return r; };
+ if(s) surEnsure(s);
+ window.__SURPRISE={
+  list:L, by:BY,
+  state:function(){ return s?SS():null; },
+  roll:function(force){ if(!s) return null; return iso(function(){ if(force){ var c=C(), id=pickId(c); if(id&&!busyNow()) surOpen(id,c); return id; } var p=surMonth(); return p?p.o:null; }); },
+  pick:function(id){ if(!s||!BY[id]) return false; return iso(function(){ var c=C(), ev=BY[id]; if(ev.chain&&!(c.F[ev.chain]&&!c.F[ev.chain].done)) return false; return surOpen(id,c); }); },
+  rng:function(f){ RAND_OVR=typeof f==='function'?f:null; }, seed:function(n){ if(s){ SS().rs=(+n>>>0); } },
+  eligible:function(){ return s?eligible(C()).map(function(ev){ return ev.id; }):[]; },
+  ctx:function(){ return s?C():null; },
+  flush:function(){ return iso(surFlush); }, month:function(n){ return iso(function(){ return surMonth(n); }); }, year:function(){ return iso(surYear); }, open:function(){ return OPEN; },
+  wanted:wantedNow, html:function(){ return s?cardHTML():''; },
+  photos:function(id){ if(!s||!BY[id]) return []; return iso(function(){ return surPhotos(BY[id],s.cal.ord); }); }
+ };
+})();
+
 })(); /* 主作用域结束 */

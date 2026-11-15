@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>山河：1840—1972 · V4.19</title>
+<title>山河：1840—1972 · V4.21</title>
 <meta name="description" content="山河：1840—1972，中国近代史人生模拟。">
 <meta name="theme-color" content="#f4f0e6">
-<link rel="stylesheet" href="style.css?v=419">
+<link rel="stylesheet" href="style.css?v=4210">
 </head>
 <body>
 <div id="hud">
@@ -25,12 +25,14 @@
   <div class="hud-r"><b id="hudPlace">—</b></div>
 </div>
 <nav id="tabs" style="display:none">
-  <button data-tab="gov" class="on">朝政</button>
-  <button data-tab="ppl">人物</button>
-  <button data-tab="mil">军政</button>
+  <button data-tab="gov" class="on">身世</button>
+  <button data-tab="act">行事</button>
+  <button data-tab="money">钱粮</button>
+  <button data-tab="ppl">人脉</button>
   <button data-tab="pol">时局</button>
+  <button data-tab="world">天下</button>
+  <button data-tab="mil">军政</button>
   <button data-tab="arc">档案</button>
-  <button data-tab="all">全览</button>
 </nav>
 <div class="wrap">
 
@@ -39,7 +41,7 @@
     <h1>山河</h1>
     <p>1840—1972 · 中国近代史人生模拟</p>
   </div>
-  <div class="stamp">V4.19</div>
+  <div class="stamp">V4.21</div>
   <p class="era-credit" id="eraCredit"></p>
 </header>
 
@@ -292,9 +294,11 @@ window.addEventListener('error',function(e){
 });
 window.addEventListener('unhandledrejection',function(e){ __showErr('promise: '+(e.reason&&e.reason.message||e.reason)); });
 </script>
-<script src="china.js?v=419"></script>
-<script src="world.js?v=419"></script>
-<script src="app.js?v=419" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<script src="china.js?v=4210"></script>
+<script src="world.js?v=4210"></script>
+<script src="roc.js?v=4220"></script>
+<script src="app.js?v=4220" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<script src="ui_fx.js?v=4210"></script>
 <div id="tipFloat"></div>
 </body>
 </html>
