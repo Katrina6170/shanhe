@@ -213,7 +213,7 @@ function evDateOf(ev){
  return t?[t[0],t[1]]:[1,1];
 }
 function evDue(ev){ var d=evDateOf(ev); return calDue(ev.y,d[0],d[1]); }
-var ACT_HINT_TEXT='每项事务独立冷却，按游戏日计算；持续行动（出巡、巡查、操练、建设等）到期自动结算。暂停时冷却与行动一并停止。';
+var ACT_HINT_TEXT='每件事都要花时间：按钮上标着大约天数；确认后日历随即推进。';
 var FAC_ACT_NAME={organize:'经营派系',contest:'竞争职位',reconcile:'协商和解',split:'推动分裂',succession:'权力更迭'};
 var FAC_ACT_DAYS={organize:30,contest:90,reconcile:60,split:180,succession:180};
 /* 轻提示：冷却拦截、自动暂停等都用它，不依赖存档卡是否可见。 */
@@ -226,6 +226,155 @@ function calToast(t){
   if(_calToastTimer) clearTimeout(_calToastTimer);
   _calToastTimer=setTimeout(function(){ try{ el.classList.remove('on'); }catch(e){} },2600);
  }catch(e){}
+}
+
+/* ================= V4.18.5：数值基础（货币、收支、兵额、国势参考值） =================
+   内部记账单位：两（以 1840 年代库平银的购买力为准，“实值两”）。
+   界面按日期换算成当时的通行货币显示：
+     1840–1911 银两（1895 年后随物价上涨，1911 年约 1.5 倍）；1912–1935.10 银元；
+     1935.11–1948.8 法币（抗战起按物价指数通胀，近似值）；1948.8–1949.5 金圆券；1949.5 起人民币（按 1955 年新币折算）。
+   所有收入、开支、礼金、借贷都按“实值两”计算，因此跨年代的数值可比；只有显示数字随币制与通胀变化。 */
+var CUR_FABI=[[1935.84,1],[1937.5,1],[1938.5,1.4],[1939.5,2.3],[1940.5,5],[1941.5,13],[1942.5,40],[1943.5,125],[1944.5,430],[1945.6,1800],[1946.5,5000],[1947.5,30000],[1948.0,100000],[1948.63,4000000]];
+var CUR_GY=[[1948.63,1],[1948.85,1.4],[1949.0,20],[1949.25,1500],[1949.41,100000]];
+function curInterp(pts,y){
+ if(y<=pts[0][0]) return pts[0][1];
+ for(var i=1;i<pts.length;i++){
+  if(y<=pts[i][0]){ var a=pts[i-1],b=pts[i],t=(y-a[0])/(b[0]-a[0]); return Math.exp(Math.log(a[1])+(Math.log(b[1])-Math.log(a[1]))*t); }
+ }
+ return pts[pts.length-1][1];
+}
+function curOf(ord){
+ var o=calFromOrd(typeof ord==='number'?ord:calTodayOrd());
+ var y=o.y+(o.m-1)/12+(o.d-1)/365;
+ if(y<1895) return {n:'银两',u:'两',k:1};
+ if(y<1912) return {n:'银两',u:'两',k:1+0.5*(y-1895)/17};
+ if(y<1935.84) return {n:'银元',u:'元',k:2.1+0.9*(y-1912)/23.84};
+ if(y<1948.63) return {n:'法币',u:'元',k:3*curInterp(CUR_FABI,y)};
+ if(y<1949.41) return {n:'金圆券',u:'元',k:4*curInterp(CUR_GY,y)};
+ return {n:'人民币',u:'元',k:10};
+}
+function fmtNum(n,dec){ return n.toFixed(dec).replace(/\.0+$/,'').replace(/(\.\d*?)0+$/,'$1'); }
+/* 金额显示：M(实值两[, 日期序数]) → “4 两 2 钱” / “12.5 元” / “3.4 万元” */
+function M(v,ord){
+ v=+v||0;
+ var neg=v<0; v=Math.abs(v);
+ var c=curOf(ord), n=v*c.k, t;
+ if(c.u==='两'){
+  if(n>=1e8) t=fmtNum(n/1e8,2)+' 亿两';
+  else if(n>=1e4) t=fmtNum(n/1e4,n>=1e6?0:1)+' 万两';
+  else if(n>=100) t=Math.round(n)+' 两';
+  else if(n>=1){ var l=Math.floor(n+1e-9), q=Math.round((n-l)*10); if(q===10){l++;q=0;} t=l+' 两'+(q?' '+q+' 钱':''); }
+  else { var qq=Math.floor(n*10+1e-9), f=Math.round((n*10-qq)*10); if(f===10){qq++;f=0;} t=(qq?qq+' 钱':'')+(f?(qq?' ':'')+f+' 分':'')||'0'; if(!qq&&!f) t='不足 1 分'; }
+ }else{
+  if(n>=1e8) t=fmtNum(n/1e8,2)+' 亿元';
+  else if(n>=1e4) t=fmtNum(n/1e4,n>=1e6?0:1)+' 万元';
+  else if(n>=100) t=Math.round(n)+' 元';
+  else t=fmtNum(n,1)+' 元';
+ }
+ if(v===0) t=(c.u==='两')?'0 两':'0 元';
+ return (neg?'-':'')+t;
+}
+function curName(ord){ var c=curOf(ord); return c.n+(c.n==='人民币'?'（按1955年新币折算）':''); }
+
+/* ---- 个人收入（实值两/月）：按身份线 × 品级；各阵营、年代不同 ---- */
+var LIVE_LINE={soldier:'mil',officer:'mil',official:'civ',merchant:'biz',student:'stu',activist:'pol'};
+var PAY_TAB={
+ qing:{ mil:[[['饷银',1.5],['饷米折银',0.5]],[['俸银',1.5],['养廉',7.5]],[['俸银',2],['养廉',10]],[['俸银',3],['养廉',40]],[['俸银',5],['养廉',125]],[['俸银',7],['养廉',165]],[['俸银',13],['养廉',1100]],[['俸银',15],['恩俸与冰炭敬',200]]],
+        civ:[[['工食银',0.5],['规费',2.5]],[['俸银',3.3],['养廉',7]],[['俸银',3.8],['养廉',85]],[['俸银',8.8],['养廉',190]],[['俸银',8.8],['养廉',250]],[['俸银',12.9],['养廉',580]],[['俸银',14.2],['养廉',1100]],[['俸银',15],['恩俸与冰炭敬',200]]] },
+ beiyang:{ mil:[2.8,20,36,120,260,400,600,1000], civ:[8,30,60,120,240,400,600,1000] },
+ kmt:{ mil:[3.3,17,30,80,150,230,300,400], civ:[5,20,40,100,140,200,270,330] },
+ prc:{ mil:[3.5,5,7,10,15,25,40,60], civ:[3.5,5,7,10,15,25,40,60] },
+ cpcSupply:[0.3,0.5,0.7,1,1.5,2,3,4],
+ biz:[1.5,5,12,30,60,100,160,250],
+ stu:[0.6,1,8,25,40,60,100,150],
+ pol:[0.5,1.5,4,8,15,25,40,60]
+};
+/* 衙署开支：清代养廉银要支付幕友束脩与衙门公费（文官约六成）、营务公费（武官约三成），这部分不是个人可支配收入 */
+var YAMEN_SHARE={civ:0.6,mil:0.3};
+/* 抗战与内战时期，领薪水的人实际收入大幅缩水（按实值计） */
+function wageErosion(y){
+ if(y<1938) return 1; if(y<1940) return 0.8; if(y<1942) return 0.5; if(y<1944) return 0.28; if(y<1946) return 0.22; if(y<1948) return 0.3; if(y<1950) return 0.2; return 1;
+}
+function livePayItems(x){
+ if(!x) return [];
+ var R=Math.max(0,Math.min(7,x.rank||0)), y=x.year, line=LIVE_LINE[x.role]||'civ', out=[];
+ if(x.isThrone){ return [['内务府供奉',3000]]; }
+ if(x.isLeader){ return [['公费特支与俸给',600]]; }
+ if(x.pendingFaction&&x.faction==='civil'&&R===0&&line!=='biz'&&line!=='stu'){ /* 尚未加入本阵营，靠零工 */ }
+ var fac=x.faction;
+ if(fac==='cpc'||(y>=1950&&(fac==='local'||fac==='civil')&&(line==='mil'||line==='civ'))){
+  if(fac==='cpc'&&y<1956){ out.push(['供给制津贴',PAY_TAB.cpcSupply[R]]); }
+  else { var pt=PAY_TAB.prc[line==='mil'?'mil':'civ']; out.push([line==='mil'?'军饷（薪金制）':'工资（行政级别）',pt[R]]); }
+  return out;
+ }
+ if(line==='mil'||line==='civ'){
+  var era=(fac==='qing'||(fac==='local'&&y<1912)||(fac==='civil'&&y<1912))?'qing':(y<1928?'beiyang':(y<1950?'kmt':'prc'));
+  if(fac==='civil'&&line==='civ'){ out.push(['薪俸',PAY_TAB.stu[R]*wageErosion(y)]); return out; }
+  var tab=PAY_TAB[era][line];
+  if(era==='qing'){ tab[R].forEach(function(it){ out.push([it[0],it[1]]); }); }
+  else { var e=wageErosion(y); out.push([line==='mil'?'军饷':'薪俸',tab[R]*e]); }
+  return out;
+ }
+ if(line==='biz') return [['铺面进项',PAY_TAB.biz[R]]];
+ if(line==='stu') return [[R<=1?'学堂膏火/抄写':'薪俸',PAY_TAB.stu[R]*(R>=2?wageErosion(y):1)]];
+ return [['组织津贴与稿费',PAY_TAB.pol[R]]];
+}
+/* 家口：22 岁成家，24 岁起约每三年添一口，最多三个孩子；50 岁后子女陆续自立 */
+function liveHousehold(x){
+ var age=(x.year||1840)-(x.birth||1820), n=1;
+ if(age>=22) n++;
+ if(age>=24) n+=Math.min(3,1+Math.floor((age-24)/3));
+ if(age>=50) n-=Math.min(3,Math.floor((age-47)/3));
+ return Math.max(1,Math.min(5,n));
+}
+var REGION_COST={'江浙':1.15,'直隶':1.1,'两广':1.1,'湘鄂':1.0,'四川':0.9,'关外':1.0};
+function liveCostItems(x){
+ if(!x) return [];
+ var R=Math.max(0,Math.min(7,x.rank||0)), n=liveHousehold(x), rf=REGION_COST[x.region]||1, out=[];
+ if(x.isThrone){ return [['宫廷用度',2500]]; }
+ var supply=(x.faction==='cpc'&&x.year<1956);          /* 供给制：本人吃穿由组织供给 */
+ var barracks=(LIVE_LINE[x.role]==='mil'&&R===0);       /* 兵丁住营房、吃大锅饭 */
+ var food=0.55*(1+0.25*R)*(supply?Math.max(0,n-1):(barracks?n-0.6:n));
+ out.push(['口粮',food*rf]);
+ var house=[0.15,0.4,1.2,3,6,10,18,30][R]*rf;
+ if(!supply&&!barracks) out.push(['房租居所',house]);
+ out.push(['衣物柴炭杂用',0.25*(supply?Math.max(0.5,n-1):n)*(1+0.3*R)]);
+ var soc=[0,0.1,0.8,3,8,15,30,60][R]; if(x.isLeader) soc=80;
+ if(soc) out.push(['应酬人情',soc]);
+ var serv=[0,0,0,2,5,10,20,40][R]; if(x.isLeader) serv=40;
+ if(serv&&!supply) out.push(['仆役车马',serv]);
+ var yl=0; livePayItems(x).forEach(function(p){ if(p[0]==='养廉') yl+=p[1]; });
+ var ln=LIVE_LINE[x.role]==='mil'?'mil':'civ';
+ if(yl) out.push([ln==='civ'?'幕友束脩与衙署公费':'营务公费',yl*YAMEN_SHARE[ln]]);
+ return out;
+}
+function sumItems(a){ var t=0; a.forEach(function(i){ t+=+i[1]||0; }); return t; }
+
+/* ---- 编制兵额（按品级）：把总约百人、千总二三百、管带一营约五百、镇/师约万人 ---- */
+var UNIT_EST=[12,100,250,600,5000,12000,40000,150000];
+/* 打点、礼金（按对方/上级的品级，实值两） */
+var GIFT_BY_LV=[0.5,2,6,15,40,100,250,600];
+function giftCost(lv){ lv=Math.max(0,Math.min(7,Math.round(+lv||0))); return GIFT_BY_LV[lv]; }
+/* 公费（职位可支配的公款，实值两/月） */
+var FUND_MONTH=[0,3,10,30,200,600,2000,8000];
+
+/* ---- 国势参考值（插值） ---- */
+var REF_POP=[[1840,4.12],[1850,4.30],[1864,3.80],[1873,3.58],[1890,3.80],[1900,4.00],[1911,4.10],[1920,4.30],[1930,4.50],[1937,4.80],[1945,4.80],[1949,5.42],[1953,5.88],[1957,6.47],[1960,6.62],[1962,6.73],[1964,7.05],[1966,7.45],[1970,8.30],[1972,8.72]];  /* 亿人 */
+var REF_REV=[[1840,4000],[1850,4200],[1860,5000],[1870,6000],[1885,7700],[1894,8100],[1900,8800],[1908,23000],[1911,30000],[1916,19500],[1925,20000],[1931,22700],[1936,40000],[1940,15000],[1945,15000],[1948,12000],[1950,65000],[1952,184000],[1957,310000],[1960,572000],[1962,313000],[1965,473000],[1970,663000],[1972,766000]]; /* 万两（实值）/年 */
+var REF_ARMY=[[1840,80],[1855,100],[1865,110],[1875,90],[1895,85],[1905,70],[1911,60],[1916,100],[1922,140],[1928,220],[1933,200],[1937,200],[1941,380],[1945,560],[1948,645],[1950,550],[1953,420],[1958,240],[1965,300],[1969,610],[1972,600]]; /* 万人：全国常备武装（各方合计，估算） */
+function refAt(tab,y){
+ if(y<=tab[0][0]) return tab[0][1];
+ for(var i=1;i<tab.length;i++){ if(y<=tab[i][0]){ var a=tab[i-1],b=tab[i]; return a[1]+(b[1]-a[1])*(y-a[0])/(b[0]-a[0]); } }
+ return tab[tab.length-1][1];
+}
+function fmtMen(n){ n=Math.max(0,Math.round(+n||0)); if(n>=10000) return fmtNum(n/10000,n>=100000?0:1)+' 万人'; if(n>=1000) return (Math.round(n/100)*100)+' 人'; return n+' 人'; }
+/* 某省驻军：全国兵额 ÷ 省数 × 本地兵力指数，再按控制方修正（日占区为日军与伪军合计） */
+function garrisonOf(ctrl,str,y){
+ y=y||((s&&s.year)||1840);
+ var tot=refAt(REF_ARMY,y)*10000, per=tot/26;
+ var f=Math.max(0.3,(+str||45)/45);
+ if(ctrl==='japan') per=y>=1937?70000:20000;
+ return Math.round(per*f/100)*100;
 }
 
 /* ================= 阵营 ================= */
@@ -247,12 +396,12 @@ var FAC={
 /* ================= 结社 / 会党 ================= */
 var CLUBS={
  none:{name:'未入会',min:0,fee:0,desc:'单打独斗，无靠山，也无牵连。'},
- qingbang:{name:'青帮',min:1840,fee:20,desc:'漕运码头上的帮会。讲辈分、讲义气，也讲规矩；一句话能办成官面上办不成的事。'},
- shanghui:{name:'商会',min:1840,fee:30,desc:'绸缎、票号、洋行凑起来的圈子。钱能开口，也能替人说话。'},
- xingzhong:{name:'兴中会',min:1894,fee:30,desc:'孙中山在檀香山立的第一面旗。人少，胆子大，被官府视为乱党。'},
- baohuang:{name:'保皇会',min:1899,fee:25,desc:'康梁一派。保皇上、行立宪，在海外华侨里募款。'},
- guangfu:{name:'光复会',min:1904,fee:30,desc:'江浙的革命团社。办报、联络会党，也做暗杀。'},
- tongmeng:{name:'同盟会',min:1905,fee:40,desc:'东京成立的全国性革命组织，孙中山为总理。“驱除鞑虏，恢复中华”。'}
+ qingbang:{name:'青帮',min:1840,fee:2,desc:'漕运码头上的帮会。讲辈分、讲义气，也讲规矩；一句话能办成官面上办不成的事。'},
+ shanghui:{name:'商会',min:1840,fee:8,desc:'绸缎、票号、洋行凑起来的圈子。钱能开口，也能替人说话。'},
+ xingzhong:{name:'兴中会',min:1894,fee:2,desc:'孙中山在檀香山立的第一面旗。人少，胆子大，被官府视为乱党。'},
+ baohuang:{name:'保皇会',min:1899,fee:2,desc:'康梁一派。保皇上、行立宪，在海外华侨里募款。'},
+ guangfu:{name:'光复会',min:1904,fee:2,desc:'江浙的革命团社。办报、联络会党，也做暗杀。'},
+ tongmeng:{name:'同盟会',min:1905,fee:2,desc:'东京成立的全国性革命组织，孙中山为总理。“驱除鞑虏，恢复中华”。'}
 };
 
 /* ================= 直属上级（按阵营 × 身份） ================= */
@@ -1084,29 +1233,31 @@ function handleSup(kind){
   s.supRel=clamp(supRel()+d);addExp('trust',4);actCool(_sk,20);
   log('你去'+u.t+'处坐了半日。'+u.t+'说了些场面上的话，也提点你两句。');
  }else if(kind==='gift'){
-  if(s.cash<40){log('你拿不出 40 两的礼。');render();return;}
-  s.cash-=40;
+  var _gc=giftCost(Math.min(7,(s.rank||0)+1));
+  if(s.cash<_gc){flash('礼金不够：给'+u.t+'备礼约需 '+M(_gc)+'，手上只有 '+M(s.cash));render();return;}
+  s.cash-=_gc;
   var g=Math.round(rnd(6,12));
   s.supRel=clamp(supRel()+g);addExp('trust',6);actCool(_sk,30);
-  log('你把 40 两的礼送进'+u.t+'府里，回话比往日客气。');
+  log('你把 '+M(_gc)+' 的礼送进'+u.t+'府里，回话比往日客气。');
  }else if(kind==='ask'){
   var R=s.rank;
   if(R>=7){log('你已至顶层。');render();return;}
-  var avg=(s.skill+s.fame+s.power+s.trust)/4;
+  var _pb=(window.__netPatron?window.__netPatron():0);
+  var avg=(s.skill+s.fame+s.power+s.trust)/4+_pb;
   actCool(_sk,90);
   var okAvg=avg>=GATE[R+1], okRel=supRel()>=45, okFee=s.cash>=(FEE[R+1]||0);
   if(!okAvg||!okRel||!okFee){
    var why=[];
-   if(!okAvg)why.push('资历还浅（四项均分 '+avg.toFixed(1)+' / 需 '+GATE[R+1]+'）');
+   if(!okAvg)why.push('资历还浅（四项均分 '+avg.toFixed(1)+(_pb?'，含关系保举 +'+_pb:'')+' / 需 '+GATE[R+1]+'）');
    if(!okRel)why.push(''+u.t+'对你还不放心（好感 '+supRel()+' / 需 45）');
-   if(!okFee)why.push('打点银钱不够（需 '+(FEE[R+1]||0)+' 两）');
+   if(!okFee)why.push('打点银钱不够（需 '+M(FEE[R+1]||0)+'）');
    log('你向上请示。'+u.t+'含糊地说了句“再等等”：'+why.join('、')+'。');
    s.supRel=clamp(supRel()-2);
   }else{
    var fee=FEE[R+1]||0;
    s.cash-=fee;
    var o=FAC[s.faction].ladder[R];s.rank++;
-   log('你向上请示。'+u.t+'拍了板，你由「'+o+'」升为「'+FAC[s.faction].ladder[s.rank]+'」'+(fee?'，打点 '+fee+' 两':'')+'。');
+   log('你向上请示。'+u.t+'拍了板，你由「'+o+'」升为「'+FAC[s.faction].ladder[s.rank]+'」'+(fee?'，打点 '+M(fee):'')+'。');
   }
  }
  render();persist();
@@ -1131,13 +1282,14 @@ function handleClub(kind){
   var arr=texts[s.club]||['会里的事办完了，人情也走到位了。'];
   log(pick(arr)+'（'+c.name+' 认可 +）');
  }else if(kind==='donate'){
-  if(s.cash<60){log('你拿不出 60 两。');render();return;}
-  s.cash-=60;s.fund+=30;
+  var _dc=[1,2,5,10,25,50,100,200][Math.max(0,Math.min(7,s.rank||0))];
+  if(s.cash<_dc){flash('捐输需 '+M(_dc)+'，手上只有 '+M(s.cash));render();return;}
+  s.cash-=_dc;
   s.clubRel=clamp(s.clubRel+9);addExp('fame',4);actCool(_ck,60);
-  log('你向'+c.name+'捐输 60 两，名册上添了你的名字。');
+  log('你向'+c.name+'捐输 '+M(_dc)+'，名册上添了你的名字。');
  }else if(kind==='arm'){
-  if(s.cash<30){log('联络新军要花钱，你手头只有 '+s.cash+' 两。');render();return;}
-  s.cash-=30;actCool(_ck,90);
+  if(s.cash<1.5){flash('联络新军要请客打点，约需 '+M(1.5)+'，你手头只有 '+M(s.cash));render();return;}
+  s.cash-=1.5;actCool(_ck,90);
   if(Math.random()<0.45){
    s.clubRel=clamp(s.clubRel+12);s.relDelta=(s.relDelta||0);
    s.alt=Math.min(99,s.alt+1);addExp('power',7);addExp('skill',4);
@@ -1153,7 +1305,7 @@ function handleClub(kind){
 /* ================= 晋升 ================= */
 var GATE=[0,25,36,48,60,72,83,92];
 /* 升到第 i 级需要的“打点银钱”（官场规矩：越往上越贵） */
-var FEE=[0,0,0,60,120,240,400,700];
+var FEE=[0,0,10,80,300,800,2000,5000]; /* V4.18.5：实值两；捐纳与打点越往上越贵 */
 /* 升到第 i 级需要的直属上级好感 */
 var SUP_REQ=[0,0,0,0,0,45,57,69];
 
@@ -1165,7 +1317,7 @@ function supOf(){
 function supRel(){return s.supRel===undefined?50:s.supRel;}
 function tryPromote(){
  if(s.rank>=7){log('你已在最高层级。');return;}
- var avg=(s.skill+s.fame+s.power+s.trust)/4;
+ var avg=(s.skill+s.fame+s.power+s.trust)/4+(window.__netPatron?window.__netPatron():0);
  if(avg<GATE[s.rank+1]){
   log('资历不够：升「'+FAC[s.faction].ladder[s.rank+1]+'」需要四项属性（能力/声望/政治/上级信任）的平均值 ≥'+GATE[s.rank+1]+'，你现在是 '+avg.toFixed(1)+'。');
   return;
@@ -1177,11 +1329,11 @@ function tryPromote(){
  }
  var fee=FEE[s.rank+1]||0;
  if(fee>0){
-  if(s.cash<fee){log('按例晋升「'+FAC[s.faction].ladder[s.rank+1]+'」需打点银钱 '+fee+' 两，你还差 '+(fee-s.cash)+' 两。');return;}
+  if(s.cash<fee){log('按例晋升「'+FAC[s.faction].ladder[s.rank+1]+'」需打点银钱 '+M(fee)+'，你还差 '+M(fee-s.cash)+'。');return;}
   s.cash-=fee;
  }
  var old=FAC[s.faction].ladder[s.rank];s.rank++;
- log('你由「'+old+'」晋升为「'+FAC[s.faction].ladder[s.rank]+'」'+(fee?'，打点花去 '+fee+' 两':'')+'。');
+ log('你由「'+old+'」晋升为「'+FAC[s.faction].ladder[s.rank]+'」'+(fee?'，打点花去 '+M(fee):'')+'。');
 }
 
 
@@ -1229,16 +1381,16 @@ function render(){
   $('x'+cap(k)).textContent=Math.floor(e)+'/100';
  });
 
- $('tAp').textContent=(s.jobs&&s.jobs.length)?('进行中 '+s.jobs.length+' 项'):'各项独立冷却';
+ $('tAp').textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'按天计时';
  $('rName').textContent=(window.rankTitleOf?window.rankTitleOf():F.ladder[rank]);
  var avg=(s.skill+s.fame+s.power+s.trust)/4;
  var next=rank>=7?null:GATE[rank+1];
  if(next===null){$('rNext').textContent='最高层级';$('rBar').style.width='100%';}
  else{$('rNext').textContent='下一级：四项均分（能力/声望/政治/信任）≥'+next+'，当前 '+avg.toFixed(1);$('rBar').style.width=Math.max(0,Math.min(100,((avg-GATE[rank])/(next-GATE[rank]))*100))+'%';}
 
- $('tCash').textContent='银钱 '+s.cash+' 两';
- $('tCash').className=s.cash<40?'tag warn':'tag';
- $('tFund').textContent='公费 '+s.fund+' 两';
+ $('tCash').textContent='现银 '+M(s.cash);
+ $('tCash').className='tag';
+ $('tFund').textContent='公费 '+M(s.fund);
  renderLadder();renderSup();renderClub();
 
  var L=leaderOf(s.faction,s.year);
@@ -1274,13 +1426,14 @@ function cap(k){return k.charAt(0).toUpperCase()+k.slice(1);}
 /* ---------- 晋升之路 ---------- */
 function renderLadder(){
  var el=$('ladderBox');if(!el||!s)return;
- var F=FAC[s.faction],avg=(s.skill+s.fame+s.power+s.trust)/4,cur=s.rank;
+ var _pb=(window.__netPatron?window.__netPatron():0);
+ var F=FAC[s.faction],avg=(s.skill+s.fame+s.power+s.trust)/4+_pb,cur=s.rank;
  var html='<ul class="ladder">';
  for(var i=0;i<F.ladder.length;i++){
   var need=GATE[i],fee=FEE[i],sreq=SUP_REQ[i];
   var cls=i===cur?'now':i<cur?'past':(avg>=need?'ready':'lock');
   var cond='四项均分≥'+need;
-  if(fee)cond+=' · 打点 '+fee+'两';
+  if(fee)cond+=' · 打点 '+M(fee);
   if(sreq)cond+=' · 上级好感≥'+sreq;
   var mark=i===cur?'你在这一级':i<cur?'已过':(avg>=need&&(!sreq||supRel()>=sreq)?'已达门槛':'未达');
   html+='<li class="'+cls+'"><b>'+(i+1)+'. '+F.ladder[i]+'</b><span class="cond">'+cond+'</span><em>'+mark+'</em></li>';
@@ -1291,7 +1444,8 @@ function renderLadder(){
   var d1=Math.max(0,GATE[cur+1]-avg), d2=Math.max(0,(FEE[cur+1]||0)-s.cash), d3=Math.max(0,(SUP_REQ[cur+1]||0)-supRel());
   var gaps=[];
   gaps.push(d1>0?'四项均分还差 '+d1.toFixed(1):'四项均分已够');
-  gaps.push(d2>0?'打点还差 '+d2+' 两':'打点钱够了');
+  gaps.push(d2>0?'打点还差 '+M(d2):'打点钱够了');
+  if(_pb)gaps.push('关系保举已计入 +'+_pb);
   if(SUP_REQ[cur+1])gaps.push(d3>0?'上级好感差 '+d3:'上级已认可');
   html+='<p class="small muted" style="margin:6px 0 0">下一级「'+nx+'」：'+gaps.join('；')+'。</p>';
  }else{html+='<p class="small muted" style="margin:6px 0 0">已至顶层。</p>';}
@@ -1307,7 +1461,7 @@ function renderSup(){
   '<div class="pdesc">'+u.d+'</div>'+
   '<div class="pbtns">'+
   '<button class="btn sm" data-sup="visit" data-cd="sup:visit">拜访</button>'+
-  '<button class="btn sm" data-sup="gift" data-cd="sup:gift">送礼（40两）</button>'+
+  '<button class="btn sm" data-sup="gift" data-cd="sup:gift">送礼（'+M(giftCost(Math.min(7,(s.rank||0)+1)))+'）</button>'+
   '<button class="btn sm" data-sup="ask" data-cd="sup:ask">请示提拔</button>'+
   '</div></div>';
 }
@@ -1323,10 +1477,10 @@ function renderClub(){
   html='<div class="person"><div class="phead"><b>'+c.name+'</b>'+
    '<span class="clq">'+s.clubSince+'年入会</span><span class="rel '+(s.clubRel>=70?'hi':s.clubRel<=30?'lo':'')+'">'+s.clubRel+'</span></div>'+
    '<div class="pdesc">'+c.desc+'</div>'+
-   '<div class="small muted">年会费 '+c.fee+' 两 · 组织活动可提升资历与声望</div>'+
+   '<div class="small muted">年会费 '+M(c.fee)+' · 组织活动可提升资历与声望</div>'+
    '<div class="pbtns">'+
    '<button class="btn sm" data-club="act" data-cd="club:act">办事</button>'+
-   '<button class="btn sm" data-club="donate" data-cd="club:donate">捐输（60两）</button>'+
+   '<button class="btn sm" data-club="donate" data-cd="club:donate">捐输（'+M([1,2,5,10,25,50,100,200][Math.max(0,Math.min(7,s.rank||0))])+'）</button>'+
    (['tongmeng','guangfu','xingzhong'].indexOf(s.club)>=0?'<button class="btn sm" data-club="arm" data-cd="club:arm">联络新军</button>':'')+
    '</div></div>';
  }
@@ -1482,19 +1636,19 @@ function openRegion(reg,info){
  $('dlgTag').textContent='区域 · '+reg.n;
  $('dlgTitle').textContent=reg.n;
  var ctrlName=CTRL_NAME[info.ctrl]||info.ctrl;
- $('dlgDesc').textContent='控制方：'+ctrlName+'　|　驻军：'+Math.round(info.str);
+ $('dlgDesc').textContent='控制方：'+ctrlName+'　|　驻军约 '+fmtMen(garrisonOf(info.ctrl,info.str))+'（兵力指数 '+Math.round(info.str)+'）';
  var body=$('dlgBody');body.innerHTML='';
 
  var p=document.createElement('p');
  p.className='small';
- p.textContent='该区域目前处于'+ctrlName+'控制之下，驻军约 '+Math.round(info.str)+' 人。';
+ p.textContent='该区域目前处于'+ctrlName+'控制之下，驻军约 '+fmtMen(garrisonOf(info.ctrl,info.str))+'（按当年全国兵额与本地兵力指数估算）。';
  body.appendChild(p);
 
  if(info.ctrl===s.faction||(s.pendingFaction&&info.ctrl===s.pendingFaction)){
   var b2=document.createElement('button');
   b2.className='choice';
   var _rgKey='region:'+reg.n, _rgBusy=actBusy(_rgKey);
-  b2.innerHTML='<b>整饬本地防务</b><div class="sub">加强该区域驻军；此后约 '+actDays(60)+' 天内不能再整饬此地。</div>'+(_rgBusy?'<div class="chance" style="color:var(--red)">'+actBusyText(_rgBusy)+'</div>':'');
+  b2.innerHTML='<b>整饬本地防务</b><div class="sub">加强该区域驻军（兵力指数 +8）；约 '+dayCost(_rgKey,30)+' 天。</div>'+(_rgBusy?'<div class="chance" style="color:var(--red)">'+actBusyText(_rgBusy)+'</div>':'');
   if(_rgBusy)b2.disabled=true;
   b2.onclick=function(){
    if(!actGate(_rgKey,'整饬'+reg.n+'防务'))return;
@@ -1587,7 +1741,7 @@ function advance(){
     if(Math.random()<0.55){s.clubRel=clamp(s.clubRel+3);}
    }else{
     s.clubRel=clamp(s.clubRel-8);
-    log('你交不出'+C.name+'的会费（'+C.fee+' 两），会里对你有些看法。');
+    log('你交不出'+C.name+'的会费（'+M(C.fee)+'），会里对你有些看法。');
    }
   }
  }
@@ -1648,7 +1802,7 @@ function syncBirth(){
 }
 function updateHint(){
  var fac=$('fFac').value,start=+$('fStart').value,min=FAC[fac].min,h=$('hint');
- if(start<min){h.innerHTML='⚠ 「'+FAC[fac].name+'」于'+min+'年成立。你将从'+start+'年起以民间身份生活，到'+min+'年自动加入。';h.style.color='var(--red)';}
+ if(start<min){h.innerHTML='注意：「'+FAC[fac].name+'」于'+min+'年成立。你将从'+start+'年起以民间身份生活，到'+min+'年自动加入。';h.style.color='var(--red)';}
  else{h.textContent='「'+FAC[fac].name+'」自'+min+'年起可加入。';h.style.color='var(--muted)';}
 }
 
@@ -1720,7 +1874,7 @@ $('supBox').addEventListener('click',function(e){
 $('clubBox').addEventListener('click',function(e){
  var b=e.target.closest('[data-club]');if(b)handleClub(b.dataset.club);
 });
-$('btnPromote').onclick=function(){tryPromote();render();persist();};
+$('btnPromote').onclick=function(){var _o=s.rank;tryPromote();if(s.rank===_o)flash('暂时升不上去，原因见编年史与「晋升之路」。');render();persist();};
 function slotKey(k){return 'shanhe_slot_'+k;}
 function packSave(){
  return {v:'1.7',ts:Date.now(),name:s.name,year:s.year,rank:s.rank,faction:s.faction,s:s,world:world};
@@ -1855,35 +2009,39 @@ function isMil(){ return ['soldier','officer'].indexOf(s.role)>=0 || /军|兵|�
 /* ---------- 部队 ---------- */
 function unitAct(kind){
  if(!s) return;
- if(!isMil()){log('你不是带兵的人。');render();return;}
- if(!actGate('unit:'+kind,({rec:'招募',drill:'操练',fight:'开拔作战'})[kind]))return;
- var U=s.unit;
+ if(!isMil()){flash('你不是带兵的人，没有部伍可以调动。');render();return;}
+ if(!actGate('unit:'+kind,({rec:'招募',drill:'部队操练',fight:'开拔作战'})[kind]))return;
+ var U=s.unit, R=Math.max(0,Math.min(7,s.rank||0)), est=UNIT_EST[R];
  if(kind==='rec'){
-  var cost=30;
-  if(s.cash<cost){log('银钱不够：招一个兵至少三十两。');render();return;}
-  s.cash-=cost;U.troops+=Math.round(rnd(6,10));U.mor=clamp(U.mor+2);actCool('unit:rec',30);
-  log('你在乡间挂了招兵的旗，来了 '+(U.troops)+' 个吃粮的人（共 '+U.troops+' 人）。');
+  if(U.troops>=est*1.1){flash('所部 '+fmtMen(U.troops)+'，已超编制（约 '+fmtMen(est)+'），上头不会再给兵额。');render();return;}
+  var n=Math.max(3,Math.round(est*0.1)), cost=Math.round(n*3*100)/100, fund=+s.fund||0;
+  if(fund+(+s.cash||0)<cost){flash('招募 '+fmtMen(n)+' 需安家银约 '+M(cost)+'（公费 '+M(fund)+'，现银 '+M(s.cash||0)+'）');render();return;}
+  var fromFund=Math.min(fund,cost); s.fund=fund-fromFund; s.cash=(+s.cash||0)-(cost-fromFund);
+  U.troops+=n;U.mor=clamp(U.mor+2);actCool('unit:rec',20);
+  log('你挂旗招兵，来了 '+n+' 个吃粮的人，发安家银 '+M(cost)+'（所部共 '+fmtMen(U.troops)+'）。');
  }else if(kind==='drill'){
-  /* V4.18：操练改为持续行动，约一个月后结算士气 */
-  var _j=jobStart('unit:drill',{label:'部队操练',days:30,fx:'unitDrill'});
-  log('部队开始操练：列队、装弹、上刺刀，预计 '+calFmtOrd(_j.end)+' 结束。');
+  var g=Math.round(rnd(6,11));
+  U.mor=clamp(U.mor+g); U.sup=clamp(U.sup-Math.round(rnd(1,3))); addExp('skill',4);
+  actCool('unit:drill',30);
+  log('部队操练一月：列队、装弹、上刺刀；士气 +'+g+'。');
  }else if(kind==='fight'){
-  var en=Math.round(rnd(20,60))+s.rank*6;
-  var p=clamp(0.25+U.troops/90+U.mor/280+U.sup/280+s.skill/320+(s.clique?0.06:0)-en/220,0.08,0.92);
+  var en=Math.round(Math.max(10,U.troops)*rnd(0.6,1.5));
+  var ratio=Math.max(10,U.troops)/Math.max(10,en);
+  var p=clamp(0.2+0.25*Math.min(2,ratio)+U.mor/400+U.sup/400+s.skill/400+(s.clique?0.05:0),0.08,0.9);
   var win=Math.random()<p;
-  var loss=Math.round(rnd(2,5))+Math.round(en/18);
+  var loss=Math.round(U.troops*(win?rnd(0.03,0.08):rnd(0.08,0.18)));
   U.troops=Math.max(0,U.troops-loss);
   U.mor=clamp(U.mor+(win?Math.round(rnd(4,9)):-Math.round(rnd(6,13))));
   U.sup=clamp(U.sup-Math.round(rnd(8,16)));
-  actCool('unit:fight',60);
+  actCool('unit:fight',45);
   if(win){
-   addExp('skill',6);s.fame+=Math.round(rnd(2,5));s.trust=clamp(s.trust+Math.round(rnd(2,5)));s.alt+=1;
-   log('【开拔】打了一仗。伤亡 '+loss+' 人，阵地拿下来了。'+(s.isThrone||s.isLeader?'捷报送进京，朝野都在看你的下一道旨意。':'上面对你有了印象。'));
+   addExp('skill',6);addExp('fame',8);s.trust=clamp(s.trust+Math.round(rnd(2,5)));s.alt+=1;
+   log('【开拔】与约 '+fmtMen(en)+' 的敌军接战，伤亡 '+fmtMen(loss)+'，阵地拿下来了。'+(s.isThrone||s.isLeader?'捷报送进京，朝野都在看你的下一道旨意。':'上面对你有了印象。'));
   }else{
-   s.trust=clamp(s.trust-Math.round(rnd(3,7)));s.fame+=1;
-   log('【开拔】打输了。伤亡 '+loss+' 人，退到二十里外收拢队伍；'+(s.isThrone||s.isLeader?'败报压不住，御史已经在拟参你的折子。':'上峰的电报很难看。'));
+   s.trust=clamp(s.trust-Math.round(rnd(3,7)));addExp('fame',2);
+   log('【开拔】与约 '+fmtMen(en)+' 的敌军接战失利，伤亡 '+fmtMen(loss)+'，退到二十里外收拢队伍；'+(s.isThrone||s.isLeader?'败报压不住，御史已经在拟参你的折子。':'上峰的电报很难看。'));
   }
-  if(U.troops<=0){log('你的队伍打散了大半，剩下的人把枪埋在土里回了乡。');}
+  if(U.troops<=0){log('你的队伍打散了，剩下的人把枪埋在土里回了乡。');}
  }
  persist();render();
 }
@@ -1910,9 +2068,10 @@ function relAct(name,kind){
  if(!actGate(_rk,({gift:'送礼',talk:'深谈',stand:'公开表态'})[kind]))return;
  var R=relOf(name);
  if(kind==='gift'){
-  if(s.cash<40){log('拿不出四十两，客套话都说不响。');render();return;}
-  s.cash-=40;R.f=clamp(R.f+6);R.i=clamp(R.i+8);actCool(_rk,30);
-  log('你把四十两封成红纸包送到'+name+'府上，话没多说。对方记了这份人情。');
+  var _rg=giftCost(Math.min(7,(s.rank||0)+1));
+  if(s.cash<_rg){flash('礼金不够：约需 '+M(_rg)+'，手上只有 '+M(s.cash));render();return;}
+  s.cash-=_rg;R.f=clamp(R.f+6);R.i=clamp(R.i+8);s.rel[name]=clamp(getRel(name)+4);actCool(_rk,30);
+  log('你把 '+M(_rg)+' 封成红纸包送到'+name+'府上，话没多说。对方记了这份人情。');
  }else if(kind==='talk'){
   R.f=clamp(R.f+3);R.c=clamp(R.c+2);actCool(_rk,20);addExp('power',3);
   log('你陪'+name+'坐了半宿，从时局说到米价，话说得投机，也留了余地。');
@@ -1948,7 +2107,7 @@ function makePaper(){
  if(big)heads.push('名流动态：近年已有 '+big+' 位要人下野或身故');
  var N=s.natl;
  heads.push('国势：财政 '+N.财政+'、民心 '+N.民心+'、军事 '+N.军事);
- heads.push('物价：米一石 '+(2+s.year/60).toFixed(1)+' 元；你的月入约 '+(Math.round((s.rank+1)*2))+' 元');
+ heads.push('物价：米一石约 '+M(2.2)+'；你的月入约 '+M(sumItems(livePayItems(s))));
  s.paper={year:s.year,heads:heads.slice(0,4)};
 }
 
@@ -1962,7 +2121,7 @@ function checkEnding(){
   var sum=[];
   sum.push('能力 '+s.skill+'、声望 '+s.fame+'、政治 '+s.power+'、上级信任 '+s.trust);
   sum.push('职位：'+(window.rankTitleOf?window.rankTitleOf():FAC[s.faction].ladder[s.rank])+(s.clique?'（'+s.clique+'）':''));
-  sum.push('银钱 '+s.cash+' 两，影响 '+s.alt);
+  sum.push('现银 '+M(s.cash)+'，影响 '+s.alt);
   end.sum=sum;
   s.ending=end;
   log('【结局】'+end.t+'——'+end.d);
@@ -1974,7 +2133,7 @@ function yearTick(){
  natlTick();
  makePaper();
  checkEnding();
- if(isMil()&&s.unit.troops<1&&s.rank>=1) s.unit.troops=Math.round(rnd(3,8));
+ if(isMil()&&s.rank>=1&&s.unit.troops<UNIT_EST[Math.min(7,s.rank)]*0.5){ s.unit.troops=Math.round(UNIT_EST[Math.min(7,s.rank)]*rnd(0.7,0.85)); log('上头按你的品级拨补兵员，所部现有 '+fmtMen(s.unit.troops)+'。'); }
 }
 
 /* ---------- 渲染 ---------- */
@@ -1987,15 +2146,15 @@ function bar(label,v){
 
 function renderExt(){
  if(!s)return; initExt();
- var showMil=isMil()||s.unit.troops>0;
+ var showMil=isMil();
  $('cardUnit').style.display=showMil?'':'none';
  if(showMil){
   var U=s.unit;
-  $('unitBox').innerHTML='<p class="small" style="margin:0 0 6px">所部 '+U.troops+' 人 · 士气 '+Math.round(U.mor)+' · 补给 '+Math.round(U.sup)+'</p>'+
+  $('unitBox').innerHTML='<p class="small" style="margin:0 0 6px">所部 '+fmtMen(U.troops)+'（编制约 '+fmtMen(UNIT_EST[Math.max(0,Math.min(7,s.rank||0))])+'）· 士气 '+Math.round(U.mor)+' · 补给 '+Math.round(U.sup)+'</p>'+
    bar('士气',U.mor)+bar('补给',U.sup)+
    '<div style="display:flex;gap:6px;margin-top:8px;flex-wrap:wrap">'+
-   '<button class="btn sm" data-u="rec" data-cd="unit:rec">招募（30 两）</button>'+
-   '<button class="btn sm" data-u="drill" data-cd="unit:drill">操练（约30天）</button>'+
+   ((s.rank||0)>=1?'<button class="btn sm" data-u="rec" data-cd="unit:rec">招募（每人安家银 '+M(3)+'）</button>':'<span class="small muted">兵丁不能招兵，升到把总/排长以上才有部伍可带。</span>')+
+   '<button class="btn sm" data-u="drill" data-cd="unit:drill">部队操练</button>'+
    '<button class="btn sm" data-u="fight" data-cd="unit:fight">开拔作战</button></div>';
   [].forEach.call($('unitBox').querySelectorAll('[data-u]'),function(b){b.onclick=function(){unitAct(b.getAttribute('data-u'));};});
  }
@@ -2967,8 +3126,8 @@ function rebelTick(){
  if((s.natl.财政||40)<28) risk+=0.12;
  if(Math.random()<Math.max(0.08,risk)){
   var place=stratName();
-  s.__rebel={n:REBEL_NAMES[Math.floor(Math.random()*REBEL_NAMES.length)],arm:Math.round(rnd(200,1200)*(1+(1940-s.year)/200)),place:place};
-  log('【内乱】'+place+'一带的'+s.__rebel.n+'聚了'+s.__rebel.arm+'人，破了县城。');
+  s.__rebel={n:REBEL_NAMES[Math.floor(Math.random()*REBEL_NAMES.length)],arm:Math.round(rnd(2000,20000)*(1+(1940-s.year)/200)/100)*100,place:place};
+  log('【内乱】'+place+'一带的'+s.__rebel.n+'聚了约 '+fmtMen(s.__rebel.arm)+'，破了县城。');
  }
 }
 function stratName(){
@@ -2979,47 +3138,46 @@ function stratName(){
 /* ---------- 行动体系：按身份换一套 ---------- */
 var ACT_SETS={
  throne:[
-  {k:'memorial',t:'⚖ 批折子',d:'看各省的题本，一并把人事与钱粮过一遍。'},
-  {k:'appoint',t:'👑 用人',d:'简放大员，扶起自己的人。'},
-  {k:'mobilize',t:'⚔ 调兵',d:'让绿营与新军动一动。'},
-  {k:'treasury',t:'💰 开库',d:'动内帑或加厘金。'},
-  {k:'tour',t:'🐎 出巡',d:'去一趟地方，让人看看天子还在。'}
+  {k:'memorial',t:'批折子',d:'看各省的题本，一并把人事与钱粮过一遍。'},
+  {k:'appoint',t:'用人',d:'简放大员，扶起自己的人。'},
+  {k:'mobilize',t:'调兵',d:'调动各路兵马。'},
+  {k:'treasury',t:'开库',d:'国库节流、加税或兴办实业。'},
+  {k:'tour',t:'出巡',d:'去一趟地方，让人看看。'}
  ],
  high:[
-  {k:'office',t:'📜 办公',d:'把衙门里的事办利索。'},
-  {k:'lobby',t:'🏛 交际',d:'在京城串门子，递帖子。'},
-  {k:'petition',t:'📄 递折子',d:'把你想做的事往上面递。'},
-  {k:'inspect',t:'🔍 巡查',d:'下去走一圈，看看底下在做什么。'},
-  {k:'earn',t:'💰 谋生',d:'顺便把自己的日子过下去。'}
+  {k:'office',t:'办公',d:'把衙门里的事办利索。'},
+  {k:'lobby',t:'交际',d:'串门子，递帖子，结交要人。'},
+  {k:'petition',t:'递折子',d:'把你想做的事往上面递。'},
+  {k:'inspect',t:'巡查',d:'下去走一圈，看看底下在做什么。'},
+  {k:'earn',t:'谋生',d:'顺便把自己的日子过下去。'},
+  {k:'rest',t:'休整',d:'少折腾，养精神。'}
  ],
  low:[
-  {k:'work',t:'🔨 做工',d:'卖力气换饭钱。'},
-  {k:'gossip',t:'🗣 打听',d:'在茶馆听消息。'},
-  {k:'befriend',t:'🤝 结交',d:'跟能说得上话的人处一处。'},
-  {k:'drill',t:'⚔ 操练',d:'练自己的身子与手艺。'},
-  {k:'rest',t:'🛏 歇着',d:'少折腾，养精神。'}
+  {k:'work',t:'做工',d:'卖力气换饭钱。'},
+  {k:'gossip',t:'打听',d:'在茶馆听消息。'},
+  {k:'befriend',t:'结交',d:'认识能说得上话的人。'},
+  {k:'drill',t:'操练',d:'练自己的身子与手艺。'},
+  {k:'rest',t:'休整',d:'少折腾，养精神。'}
  ]
 };
+/* V4.18.5：每个身份都有自己的本行，按钮只放这个身份真正能做的事 */
+var ROLE_MAIN={official:{k:'office',t:'办事',d:'处理衙门、账务或地方公务。'},merchant:{k:'earn',t:'谋生',d:'跑货、承办差事、拓展门路。'},
+ student:{k:'study',t:'进修',d:'读书、投考、译书写稿。'},activist:{k:'organize',t:'组织',d:'传单、联络、募款，有风险。'}};
 function actSetOf(){
  if(!s) return ACT_SETS.low;
  if(s.isThrone||s.isLeader) return ACT_SETS.throne;
+ var mil=s.role==='soldier'||s.role==='officer';
  if(s.rank>=3){
-  // 高阶行动组原先给所有身份都显示“办公”，但军官/学生/活动家没有该权限，
-  // 导致按钮看得见却点不动。现在按身份替换为真正可执行的行动。
   return ACT_SETS.high.map(function(it){
    if(it.k!=='office')return it;
    if(s.role==='official'||s.role==='merchant')return it;
-   if(s.role==='soldier'||s.role==='officer')return {k:'drill',t:'⚔ 操练',d:'以军官/军人身份整训队伍、改善纪律与战备。'};
-   return {k:'befriend',t:'🤝 结交',d:'以社会关系和专业人脉扩大影响。'};
+   if(mil)return {k:'drill',t:'操练',d:'整训队伍、改善纪律与战备。'};
+   return ROLE_MAIN[s.role]||{k:'befriend',t:'结交',d:'以社会关系和专业人脉扩大影响。'};
   });
  }
- // 低阶文官/商人也应有明确的「办事」入口，避免原版按钮被身份分层替换后消失。
- if(s.role==='official'||s.role==='merchant'){
-  return ACT_SETS.low.map(function(it){
-   return it.k==='drill'?{k:'office',t:'📜 办事',d:'处理衙门、账务或地方公务，积累能力与秩序。'}:it;
-  });
- }
- return ACT_SETS.low;
+ var set=ACT_SETS.low.slice();
+ if(ROLE_MAIN[s.role]) set.unshift(ROLE_MAIN[s.role]);
+ return set;
 }
 function gAdd(k,v){ if(!s.natl) s.natl={稳定:62,经济:38,军事:45,财政:40,秩序:55,民心:50,国际:30,工业:15}; s.natl[k]=clamp((s.natl[k]||0)+v); }
 window.__gAdd=gAdd; window.__initPowers=initPowers; /* V4.18：导出给主作用域代理（见文件顶部） */
@@ -3094,7 +3252,7 @@ function renderActs(){
   var b=document.createElement('button');
   b.className='act'; b.setAttribute('data-act',it.k); b.setAttribute('data-cd','gov:'+it.k);
   var sp=document.createElement('span'); sp.className='tips'; sp.setAttribute('data-tip',it.d);
-  sp.innerHTML='<b>'+it.t+'</b><span>'+it.d.slice(0,10)+'</span>';
+  sp.innerHTML='<b>'+it.t+'</b><span>'+it.d.slice(0,12)+'</span>';
   b.appendChild(sp);
   b.addEventListener('click',function(){ doGovern(it.k); });
   box.appendChild(b);
@@ -3159,12 +3317,13 @@ function _powerAct_base(k,n){
   var d=Math.round(rnd(3,9)); o.r=clamp(o.r+d); actCool('pw:talk:'+n,30);
   log('【外事】你与'+n+'的使节谈了两轮，关系 +'+d+'。');
  } else if(k==='loan'){
-  var m=Math.round(rnd(300,1200)); s.cash+=m; o.r=clamp(o.r+6); gAdd('财政',3); gAdd('民心',-2); actCool('pw:loan:'+n,180);
-  log('【外事】向'+n+'借了 '+m+' 两。银子到账，账本上的窟窿换了个名字。');
+  var m=Math.round(stateRev()*rnd(0.05,0.15)); stateRes(m); o.r=clamp(o.r+6); gAdd('财政',3); gAdd('民心',-2); actCool('pw:loan:'+n,180);
+  log('【外事】向'+n+'借款约 '+M(m*1e4)+'，以关税、盐税作抵。银子入了国库，账本上的窟窿换了个名字。');
  } else if(k==='buy'){
-  if(s.cash<400){ flash('银子不够（需 400 两）'); return; }
-  s.cash-=400; gAdd('军事',Math.round(rnd(2,5))); o.r=clamp(o.r+2); actCool('pw:buy:'+n,90);
-  log('【外事】从'+n+'购入枪炮一批，军力上涨。');
+  var _bc=Math.round(stateRev()*0.04); var _E=econEnsure(s);
+  if(_E.state.res<_bc){ flash('国库存银不足：购械约需 '+M(_bc*1e4)+'，库存 '+M(_E.state.res*1e4)); return; }
+  stateRes(-_bc); gAdd('军事',Math.round(rnd(2,5))); o.r=clamp(o.r+2); actCool('pw:buy:'+n,90);
+  log('【外事】从'+n+'购入枪炮一批，耗银约 '+M(_bc*1e4)+'，军力上涨。');
  } else if(k==='war'){
   actCool('pw:war:'+n,60);
   if(!o.war){
@@ -3227,8 +3386,8 @@ function yearReview(){
  var rows=[];
  rows.push('国势：政治稳定 '+Math.round(s.natl.稳定)+' · 经济 '+Math.round(s.natl.经济)+' · 军事 '+Math.round(s.natl.军事)+' · 民心 '+Math.round(s.natl.民心));
  rows.push('财政 '+Math.round(s.natl.财政)+' · 社会秩序 '+Math.round(s.natl.秩序)+' · 工业化 '+Math.round(s.natl.工业)+' · 国际地位 '+Math.round(s.natl.国际));
- rows.push('你的银钱 '+Math.round(s.cash)+' 两 · 声望 '+Math.round(s.fame)+' · 影响 '+Math.round(s.power));
- if(s.__rebel) rows.push('未平：'+s.__rebel.place+' 的 '+s.__rebel.n+'（'+s.__rebel.arm+' 人）');
+ rows.push('你的现银 '+M(s.cash)+' · 声望 '+Math.round(s.fame)+' · 影响 '+Math.round(s.power));
+ if(s.__rebel) rows.push('未平：'+s.__rebel.place+' 的 '+s.__rebel.n+'（约 '+fmtMen(s.__rebel.arm)+'）');
  var wars=POWERS.filter(function(P){return s.__powers&&s.__powers[P.n]&&s.__powers[P.n].war;}).map(function(P){return P.n;});
  if(wars.length) rows.push('交兵中：'+wars.join('、'));
  $('dlgTag').textContent='这一年 · '+s.year+'年';
@@ -3339,12 +3498,12 @@ function openCountry(n){
   if(own!=='qing'&&s.year>=1840){
    var b=document.createElement('button');
    b.className='choice';
-   b.innerHTML='<b>调兵攻取</b><div class="sub">60 两军费；军事越强越容易得手。之后约 '+actDays(90)+' 天不能再次用兵。</div>';
+   b.innerHTML='<b>调兵攻取</b><div class="sub">国库拨军费约 '+M(stateRev()*0.02*1e4)+'；军事越强越容易得手。约 '+dayCost('country:attack',60)+' 天。</div>';
    b.onclick=function(){
     closeDlg();
     if(!actGate('country:attack','调兵攻取')){ render(); return; }
-    if((s.cash||0)<60){ log('库里拿不出这 60 两开拔钱。'); render(); return; }
-    actCool('country:attack',90); s.cash-=60;
+    if(econEnsure(s).state.res<stateRev()*0.02){ flash('国库拿不出开拔军费（约 '+M(stateRev()*0.02*1e4)+'）'); render(); return; }
+    actCool('country:attack',90); stateRes(-stateRev()*0.02);
     var odds=Math.max(8,Math.min(72, 18 + (s.skill||0)*0.35 + ((world&&world.guo&&world.guo.mil)||40)*0.35 + (s.power||0)*0.12));
     var win=Math.random()*100<odds;
     world.owner=world.owner||{};
@@ -3491,7 +3650,7 @@ window.__declWar=function(p){ var w=__W2(); w.war={p:p,t:1,score:0}; __LOG2('【
   if(own!=='qing'){
    var attack=document.createElement('button');
    attack.className='choice';
-   attack.innerHTML='<b>兴兵侵入</b><div class="sub">胜了就换旗；之后约 '+actDays(90)+' 天不能再次用兵。成功率约 '+Math.max(10,Math.min(70, Math.round(16+(s.skill||0)*0.3+myMil*0.4)))+'%。</div>';
+   attack.innerHTML='<b>兴兵侵入</b><div class="sub">胜了就换旗；约 '+dayCost('country:attack',60)+' 天。成功率约 '+Math.max(10,Math.min(70, Math.round(16+(s.skill||0)*0.3+myMil*0.4)))+'%。</div>';
    attack.onclick=function(){
     closeDlg();
     if(!actGate('country:attack','兴兵侵入')){ __RN2(); return; }
@@ -3564,7 +3723,7 @@ window.__renderCompare=renderCompare;
   if(!b) return;
   var key=MAP[b.getAttribute('data-n')]||null;
   if(!key) return;
-  if(actBusy('pw:war:'+b.getAttribute('data-n'))) return; /* V4.18：宣战/和谈冷却中 */
+  if(window.__CAL&&window.__CAL.spending&&window.__CAL.spending()) return; /* V4.18.5：正在办别的事 */
   var w=__W2();
   if(w.war&&w.war.p===key) return;
   setTimeout(function(){ window.__declWar(key); },30);
@@ -3633,7 +3792,7 @@ function v4appoint(){
    actCool('gov:appoint',60);
    v4talents().push({n:p.n,s:p.s,bad:p.bad,d:p.d,rel:45,rank:s.rank||0});
    s.alt+=1; s.trust=V4C(s.trust+Math.round(p.s/30),0,100);
-   if(p.bad>=2){ s.cash=Math.max(0,s.cash-Math.round(p.s*1.5));
+   if(p.bad>=2){ stateRes(-Math.round(p.s*0.5));
      V4L('【用人】你把'+p.n+'放了上去。第一件事是办酒席，账走的是官银。'); }
    else { V4L('【用人】'+p.n+'磕头谢恩，说愿效死力。'); }
    mask.classList.add('hidden'); V4R();
@@ -3655,8 +3814,8 @@ function v4mobilize(){
  document.getElementById('dlgDesc').textContent='绿营便宜但不经打，新军能打但烧钱，禁军动了京城就空。';
  body.innerHTML='';
  var opts=[
-  {t:'调绿营出省',d:'省钱，战力和军纪一般。',run:function(){ g.mil=V4C((g.mil||45)+1,0,100); g.ord=V4C((g.ord||55)-2,0,100); s.cash=Math.max(0,s.cash-80); V4L('【调兵】绿营拔营，沿途县令叫苦。'); }},
-  {t:'调新军北上',d:'战力强，银子粮草烧得快。',run:function(){ g.mil=V4C((g.mil||45)+3,0,100); g.fin=V4C((g.fin||40)-3,0,100); s.cash=Math.max(0,s.cash-200); V4L('【调兵】新军开拔，铁路运兵，粮台追着要钱。'); }},
+  {t:'调绿营出省',d:'省钱，战力和军纪一般。',run:function(){ g.mil=V4C((g.mil||45)+1,0,100); g.ord=V4C((g.ord||55)-2,0,100); stateRes(-Math.round(stateRev()*0.004)); V4L('【调兵】绿营拔营，开拔银约 '+M(stateRev()*0.004*1e4)+'，沿途县令叫苦。'); }},
+  {t:'调新军北上',d:'战力强，银子粮草烧得快。',run:function(){ g.mil=V4C((g.mil||45)+3,0,100); g.fin=V4C((g.fin||40)-3,0,100); stateRes(-Math.round(stateRev()*0.01)); V4L('【调兵】新军开拔，铁路运兵，耗银约 '+M(stateRev()*0.01*1e4)+'，粮台追着要钱。'); }},
   {t:'禁军守京不动',d:'稳住京师，对外没动静。',run:function(){ g.ord=V4C((g.ord||55)+3,0,100); g.mil=V4C((g.mil||45)-1,0,100); V4L('【调兵】禁军把城门看了起来，京里安静，外边的事更难办。'); }}
  ];
  opts.forEach(function(o){
@@ -3712,7 +3871,7 @@ function v4renderTalentCard(){
  if(box.dataset.sig===sig) return;
  box.dataset.sig=sig;
  if(!st.length){ var empty='<p class="small muted">还没有自己拔擢起来的人，用「用人」选几个。</p>'; if(box.innerHTML!==empty)box.innerHTML=empty; return; }
- box.innerHTML='<p class="small muted" style="margin:6px 0 5px">麾下人才（提拔要 40 两）</p>'+
+ box.innerHTML='<p class="small muted" style="margin:6px 0 5px">麾下人才（提拔按对方品级打点）</p>'+
   st.map(function(p,i){
    return '<div class="pcard"><div style="display:flex;justify-content:space-between;align-items:center"><b>'+p.n+'</b>'+
     '<button class="btn sm" data-upp="'+i+'"'+(p.rel>=96?' disabled':'')+'>提拔</button></div>'+
@@ -3722,8 +3881,9 @@ function v4renderTalentCard(){
   b.onclick=function(){
    var s=V4S(); var p=v4talents()[+b.getAttribute('data-upp')];
    if(!s||!p) return;
-   if(s.cash<40){ V4L('提拔要打点，你手上不到 40 两。'); V4R(); return; }
-   s.cash-=40; p.rel=V4C(p.rel+12,0,100); p.rank=Math.min(7,(p.rank||0)+1); s.trust=V4C(s.trust+3,0,100);
+   var _tc=giftCost(Math.min(7,(p.rank||0)+1));
+   if(s.cash<_tc){ flash('提拔要打点约 '+M(_tc)+'，你手上只有 '+M(s.cash)); V4R(); return; }
+   s.cash-=_tc; p.rel=V4C(p.rel+12,0,100); p.rank=Math.min(7,(p.rank||0)+1); s.trust=V4C(s.trust+3,0,100);
    V4L('【拔擢】'+p.n+'又进了一级，来谢的时候带了两盒茶叶。'); V4R();
   };
  });
@@ -3771,10 +3931,10 @@ function v4warPanel(){
  if(typeof war.startOrd==='number'&&!war.done) war.day=Math.max(0,calTodayOrd()-war.startOrd);
  var my=war.my, en=war.en;
  var rows=
-  '<div class="pwr"><b>我军</b><span class="pb"><i style="width:'+Math.min(100,my.n)+'%;background:#a23a2c"></i></span><em>'+Math.round(my.n)+'</em></div>'+
+  '<div class="pwr"><b>我军</b><span class="pb"><i style="width:'+Math.min(100,my.n)+'%;background:#a23a2c"></i></span><em>'+fmtMen(my.n*1000)+'</em></div>'+
   '<div class="pwr"><b>士气</b><span class="pb"><i style="width:'+Math.max(0,my.mor)+'%;background:#6b7a8f"></i></span><em>'+Math.round(my.mor)+'</em></div>'+
   '<div class="pwr"><b>粮草</b><span class="pb"><i style="width:'+Math.max(0,my.sup||0)+'%;background:#8a7a5c"></i></span><em>'+Math.round(my.sup||0)+'</em></div>'+
-  '<div class="pwr"><b>'+V4CN(war.p)+'</b><span class="pb"><i style="width:'+Math.min(100,en.n)+'%;background:#6d4a4a"></i></span><em>'+Math.round(en.n)+'</em></div>';
+  '<div class="pwr"><b>'+V4CN(war.p)+'</b><span class="pb"><i style="width:'+Math.min(100,en.n)+'%;background:#6d4a4a"></i></span><em>'+fmtMen(en.n*1000)+'</em></div>';
  if(war.done){
   box.innerHTML='<p class="small">此役已定：'+(war.done==='win'?'我军胜，对方割地求和。':'我军败，只能签和约。')+'　历时 '+Math.round(war.day/30)+' 个月</p>'+
    (war.logs||[]).slice(-4).map(function(x){return '<div class="small muted">· '+x+'</div>';}).join('')+
@@ -3813,16 +3973,16 @@ function v4battle(cmd){
   en.n=Math.max(0,en.n-kill); en.mor=V4C(en.mor-5,0,100);
   var loss=Math.round(Math.max(1,en.n*0.05)+Math.random()*3);
   my.n=Math.max(0,my.n-loss); my.mor=V4C(my.mor-3,0,100);
-  msg.push('进攻：推进十余里，毙伤敌 '+kill+'，我折 '+loss+'。');
+  msg.push('进攻：推进十余里，毙伤敌约 '+fmtMen(kill*1000)+'，我折约 '+fmtMen(loss*1000)+'。');
  } else if(cmd==='hold'){
   my.mor=V4C(my.mor+3,0,100); en.mor=V4C(en.mor-2,0,100);
   var l2=Math.round(Math.max(0,en.n*0.03)); my.n=Math.max(0,my.n-l2);
-  msg.push('固守：挖壕据守，敌军试探损失 '+l2+'。');
+  msg.push('固守：挖壕据守，敌军试探损失约 '+fmtMen(l2*1000)+'。');
  } else if(cmd==='flank'){
-  if(Math.random()<0.55){ var k2=Math.round(my.n*0.16); en.n=Math.max(0,en.n-k2); en.mor=V4C(en.mor-9,0,100); msg.push('包抄得手：一口吃掉对方 '+k2+' 人，阵脚乱了。'); }
-  else { var k3=Math.round(my.n*0.12); my.n=Math.max(0,my.n-k3); my.mor=V4C(my.mor-8,0,100); msg.push('包抄被识破，反被切了后路，折 '+k3+' 人。'); }
+  if(Math.random()<0.55){ var k2=Math.round(my.n*0.16); en.n=Math.max(0,en.n-k2); en.mor=V4C(en.mor-9,0,100); msg.push('包抄得手：一口吃掉对方约 '+fmtMen(k2*1000)+'，阵脚乱了。'); }
+  else { var k3=Math.round(my.n*0.12); my.n=Math.max(0,my.n-k3); my.mor=V4C(my.mor-8,0,100); msg.push('包抄被识破，反被切了后路，折约 '+fmtMen(k3*1000)+'。'); }
  } else if(cmd==='supply'){
-  s.cash=Math.max(0,(s.cash||0)-120); my.sup=V4C((my.sup||60)+12,0,100); my.mor=V4C(my.mor+5,0,100);
+  stateRes(-Math.round(stateRev()*0.01)); my.sup=V4C((my.sup||60)+12,0,100); my.mor=V4C(my.mor+5,0,100);
   if(w.guo) w.guo.fin=V4C((w.guo.fin||40)-2,0,100);
   msg.push('调粮：后方送来一批，军心稳了，户部又添亏空。');
  } else if(cmd==='retreat'){
@@ -3915,13 +4075,14 @@ window.__declWarV4=function(p){
   cards().forEach(function(c){
    var h=c.querySelector('h2'); if(!h) return;
    var t=h.textContent.trim();
-   var cat=catOf(t);
-   c.dataset.cat=cat;
-   var display=(tab==='all'||tab===cat)?'':'none'; if(c.style.display!==display)c.style.display=display;
+   var cat=window.__tabCat?window.__tabCat(c,t):catOf(t);
+   if(c.dataset.cat!==cat) c.dataset.cat=cat;
+   var hide=!(tab==='all'||(' '+cat+' ').indexOf(' '+tab+' ')>=0);
+   if(c.classList.contains('tabhide')!==hide) c.classList.toggle('tabhide',hide);
   });
-  // 地图卡与角色创建卡：始终跟随 军政 / 开局
+  // 地图：时局、军政、全览
   var map=document.querySelector('.main>div:nth-child(2)');
-  if(map){var md=(tab==='all'||tab==='mil'||tab==='gov')?'':'none';if(map.style.display!==md)map.style.display=md;}
+  if(map){var mh=!(tab==='all'||tab==='mil'||tab==='pol');if(map.classList.contains('tabhide')!==mh)map.classList.toggle('tabhide',mh);}
   var setup=document.getElementById('setupCard');
   if(setup) setup.style.display=(tab==='all'||tab==='arc')?'':'none';
  }
@@ -3949,7 +4110,7 @@ window.__declWarV4=function(p){
   set('hudYear', s.cal?calFmtOrd(s.cal.ord):((s.year||'—')+'年'));
   set('hudAge', age+'岁');
   set('hudFac', FACN[s.faction]||s.faction||'—');
-  set('hudCash', Math.round(s.cash||0)+' 两');
+  set('hudCash', M(s.cash||0));
   set('hudPlace', s.region||s.place||'—');
  }
  function run(){
@@ -3961,8 +4122,8 @@ window.__declWarV4=function(p){
   if(hudEl){var hd=started?'':'none';if(hudEl.style.display!==hd)hudEl.style.display=hd;}
   if(!started)document.body.style.paddingTop='0'; /* V4.17：开局后由时间栏布局函数统一计算 */
   if(!started){
-   cards().forEach(function(c){ c.style.display=''; });
-   var map=document.querySelector('.main>div:nth-child(2)'); if(map) map.style.display='none';
+   cards().forEach(function(c){ c.classList.remove('tabhide'); });
+   var map=document.querySelector('.main>div:nth-child(2)'); if(map) map.classList.add('tabhide');
    var st=document.getElementById('setup'); if(st){ st.classList.remove('hidden'); st.style.display=''; }
    var gm=document.getElementById('game'); if(gm) gm.classList.add('hidden');
    return;
@@ -4218,7 +4379,7 @@ window.v4L = window.v4L || function(t){
  document.addEventListener('click',function(e){
   var b=e.target.closest('[data-act="befriend"]');
   if(!b) return;
-  if(actBusy('gov:befriend')) return; /* V4.18：结交冷却中不再弹出拜会 */
+  return; /* V4.18.5：结交改为在选项里直接结识一人，记入新关系网，不再弹出旧拜会框 */
   setTimeout(function(){ openMeet(who()); },240);
  },true);
 
@@ -4263,6 +4424,7 @@ window.v4L = window.v4L || function(t){
 
  /* 关系网：把 s.met 也算进来 */
  var paint=setInterval(function(){
+  if(window.__V4185NET) return; /* V4.18.5：关系网由新卡片绘制 */
   var s=ST(); if(!s) return;
   var host=document.getElementById('v42net');
   if(!host){
@@ -4421,7 +4583,7 @@ window.v4L = window.v4L || function(t){
   }
   var mil=document.querySelector('#tabs button[data-tab="mil"]');
   if(mil){
-   var mname=['身边','哨上','军务','军国'][t];
+   var mname=(s.role==='soldier'||s.role==='officer'||t===3)?['身边','哨上','军务','军国'][t]:'军情';
    if(mil.textContent!==mname) mil.textContent=mname;
   }
  }
@@ -4629,7 +4791,7 @@ checkEnding=function(){
  if(s.dead)end={t:'身故',d:'你死在'+(s.deadYear||s.year)+'年，'+(s.deathCause||'世事无常')+'。'};
  else if(s.year>1972)end=verdict();
  if(end){
-  end.sum=['能力 '+s.skill+'、声望 '+s.fame+'、政治 '+s.power+'、上级信任 '+s.trust,'职位：'+(window.rankTitleOf?window.rankTitleOf():FAC[s.faction].ladder[s.rank])+(s.clique?'（'+s.clique+'）':''),'银钱 '+s.cash+' 两，影响 '+s.alt];
+  end.sum=['能力 '+s.skill+'、声望 '+s.fame+'、政治 '+s.power+'、上级信任 '+s.trust,'职位：'+(window.rankTitleOf?window.rankTitleOf():FAC[s.faction].ladder[s.rank])+(s.clique?'（'+s.clique+'）':''),'现银 '+M(s.cash)+'，影响 '+s.alt];
   s.ending=end;log('【结局】'+end.t+'——'+end.d);
  }
 };
@@ -4816,7 +4978,7 @@ function openConstitutionPanel(){
   var h=document.createElement('h3');h.textContent=g.title;wrap.appendChild(h);
   Object.keys(g.items).forEach(function(key){
    var it=g.items[key],b=document.createElement('button');b.className='choice constitution-choice';
-   b.innerHTML='<b>'+it.name+(s.constitution[axis]===key?'　✓ 当前':'')+'</b><div class="sub">'+it.desc+'</div><div class="sub">优势：'+it.pros+' 风险：'+it.risk+'</div>';
+   b.innerHTML='<b>'+it.name+(s.constitution[axis]===key?'（当前）':'')+'</b><div class="sub">'+it.desc+'</div><div class="sub">优势：'+it.pros+' 风险：'+it.risk+'</div>';
    b.onclick=function(){setConstitutionAxis(axis,key);openConstitutionPanel();render();persist();};wrap.appendChild(b);
   });body.appendChild(wrap);
  });
@@ -4999,7 +5161,7 @@ setTimeout(installConstitutionEntry,500);
   if((k==='loan'||k==='buy')&&!V46Leader(x)){V46Note('【权限不足】国家借外债与军购必须由最高决策者批准。');return;}
   if(k==='talk'&&!V46CanEnvoy(x)){V46Note('【权限不足】你没有外交或商业交涉身份。');return;}
   if(k==='talk'&&V46Merchant(x)){
-   initPowers();var p=x.__powers[n];if(!p)return;actCool('pw:talk:'+n,30);var gain=Math.round(rnd(2,6));p.r=V46Clamp(p.r+gain);x.cash=(x.cash||0)+Math.round(rnd(5,18));x.fame=V46Clamp((x.fame||0)+1);V46Note('【商贸】你与'+n+'的商行谈成一笔生意，商业关系改善，个人收入增加；这不代表国家外交立场改变。');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();return;
+   initPowers();var p=x.__powers[n];if(!p)return;actCool('pw:talk:'+n,30);var gain=Math.round(rnd(2,6));p.r=V46Clamp(p.r+gain);x.cash=(x.cash||0)+Math.round(rnd(1,4)*((x.rank||0)+1)*100)/100;x.fame=V46Clamp((x.fame||0)+1);V46Note('【商贸】你与'+n+'的商行谈成一笔生意，商业关系改善，个人收入增加；这不代表国家外交立场改变。');if(window.__RENDER)window.__RENDER();if(typeof persist==='function')persist();return;
   }
   if(k==='talk'&&!V46Leader(x)&&!(V46Official(x)&&V46Rank(x)>=5)){V46Note('【权限不足】只有高级文官或国家领袖可以奉命进行外交交涉。');return;}
   oldPowerAct(k,n);
@@ -5227,143 +5389,179 @@ setTimeout(installConstitutionEntry,500);
   s[attr]=clamp((Number(s[attr])||0)+gain);
  };
 
- // 各身份点击事项后，先选择具体做法；确认后该事项进入独立冷却或开始持续行动（V4.18）。
+ // V4.18.5：点开事项后选具体做法；确认后按所需天数推进日历（时间成本），取消冷却。
+ // 金额一律按“实值两”计算（见文件顶部 V4.18.5 数值基础），界面按当时币制显示。
+ function R_(x){ return Math.max(0,Math.min(7,x.rank||0)); }
+ function skillF(x){ return 0.8+(+x.skill||0)/100; }
+ function earnCap(x){ return [8,25,80,300,800,2000,5000,15000][R_(x)]; }
+ function sideFee(x){ return [0.8,2,5,12,25,40,60,90][R_(x)]; }
+ function netAdd(type){ try{ return window.__netNew?window.__netNew(type):null; }catch(e){ return null; } }
+ function netInfoLine(x){ try{ return window.__netInfo?window.__netInfo():''; }catch(e){ return ''; } }
+ function stateRes(d){ try{ if(window.__stateRes) return window.__stateRes(d); }catch(e){} return 0; }
+ function stateRev(){ try{ return window.__stateRev?window.__stateRev():5000; }catch(e){ return 5000; } }
+ function pay(x,v){ x.cash=(+x.cash||0)+v; return v; }
+ function spend(x,v,why){ if((+x.cash||0)<v){ flash((why||'银钱不足')+'：需要 '+M(v)+'，手上只有 '+M(x.cash||0)); return false; } x.cash-=v; return true; }
+ /* 每项：[名称, 说明, 基准天数, 效果函数(x, 天数) → 结果文字 / false 表示放弃（不耗时间）] */
  var annualChoices={
-  memorial:{title:'本年朝政重点',items:[
-   ['整顿钱粮与漕运','清查账册、疏通漕运，优先稳住财政与秩序。',function(x){gAdd('财政',4);gAdd('秩序',3);addExp('power',4);addExp('trust',3);}],
-   ['赈济灾民与平抑粮价','拨款赈济，缓和民怨，但会增加财政压力。',function(x){var c=Math.min(x.cash||0,120);x.cash-=c;gAdd('民心',6);gAdd('秩序',3);gAdd('财政',-2);addExp('fame',4);}],
-   ['严查地方官员贪腐','派人核账、追查亏空，可能得罪地方势力。',function(x){gAdd('秩序',5);gAdd('财政',2);gAdd('民心',Math.random()<.65?2:-2);addExp('power',4);addExp('trust',-2);}]
+  memorial:{title:'朝政重点',items:[
+   ['整顿钱粮与漕运','清查账册、疏通漕运，优先稳住财政与秩序。',10,function(x){gAdd('财政',3);gAdd('秩序',2);addExp('power',4);addExp('trust',3);stateRes(stateRev()*0.01);return '户部报来的亏空缩了一截，漕船按期北上。';}],
+   ['赈济灾民与平抑粮价','动用国库赈济，缓和民怨，但财政吃紧。',15,function(x){var c=stateRev()*0.02;stateRes(-c);gAdd('民心',5);gAdd('秩序',2);gAdd('财政',-2);addExp('fame',4);return '拨出赈银约 '+M(c*1e4)+'，粥厂开了，灾民没有大规模流散。';}],
+   ['严查地方官员贪腐','派人核账、追查亏空，可能得罪地方势力。',20,function(x){gAdd('秩序',4);gAdd('财政',2);gAdd('民心',Math.random()<.65?2:-2);addExp('power',4);addExp('trust',-2);stateRes(stateRev()*0.005);return '追回一批亏空，也结下不少仇家。';}]
   ]},
-  appoint:{title:'本年人事安排',items:[
-   ['任用能吏','优先提拔有办事能力、熟悉地方事务的人。',function(x){addExp('trust',4);addExp('power',3);gAdd('秩序',4);}],
-   ['安插亲信','把关键位置交给可靠的自己人，巩固权力。',function(x){addExp('power',5);addExp('trust',2);gAdd('秩序',-1);}],
-   ['兼顾各派平衡','在不同派系之间分配职位，减少公开冲突。',function(x){addExp('trust',3);gAdd('稳定',4);gAdd('财政',-1);}]
+  appoint:{title:'人事安排',items:[
+   ['任用能吏','优先提拔有办事能力、熟悉地方事务的人。',15,function(x){addExp('trust',4);addExp('power',3);gAdd('秩序',3);return '几个能吏补了要缺。';}],
+   ['安插亲信','把关键位置交给可靠的自己人，巩固权力。',15,function(x){addExp('power',5);addExp('trust',2);gAdd('秩序',-1);return '要害位置换上了自己人。';}],
+   ['兼顾各派平衡','在不同派系之间分配职位，减少公开冲突。',20,function(x){addExp('trust',3);gAdd('稳定',3);gAdd('财政',-1);return '各派都分到一杯羹，吵声小了。';}]
   ]},
-  mobilize:{title:'本年军事部署',items:[
-   ['整训军队','整顿编制、训练与军纪，提升军队战备。',function(x){gAdd('军事',5);gAdd('财政',-2);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+5);addExp('skill',3);}],
-   ['加强地方防务','修筑防线、补充守备，优先保护重要城镇。',function(x){gAdd('军事',3);gAdd('秩序',3);gAdd('财政',-1);}],
-   ['调兵平乱','集中兵力应对境内动荡；若无内乱，则改为巡防。',function(x){gAdd('军事',3);gAdd('秩序',x.__rebel?4:1);gAdd('民心',x.__rebel?-2:1);if(x.__rebel)x.__rebel.arm=Math.max(0,x.__rebel.arm- Math.round(x.__rebel.arm*.12));}]
+  mobilize:{title:'军事部署',items:[
+   ['整训军队','整顿编制、训练与军纪，提升军队战备。',30,function(x){gAdd('军事',4);gAdd('财政',-2);stateRes(-stateRev()*0.01);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+5);addExp('skill',3);return '各营整训完毕，军纪有起色。';}],
+   ['加强地方防务','修筑防线、补充守备，优先保护重要城镇。',20,function(x){gAdd('军事',2);gAdd('秩序',3);gAdd('财政',-1);stateRes(-stateRev()*0.005);return '要隘添了炮台与守兵。';}],
+   ['调兵平乱','集中兵力应对境内动荡；若无内乱，则改为巡防。',30,function(x){gAdd('军事',2);gAdd('秩序',x.__rebel?4:1);gAdd('民心',x.__rebel?-2:1);if(x.__rebel)x.__rebel.arm=Math.max(0,x.__rebel.arm-Math.round(x.__rebel.arm*.2));return x.__rebel?'官军压向'+x.__rebel.place+'，乱众折损两成。':'各路兵马巡防一圈，地方无事。';}]
   ]},
-  treasury:{title:'本年财政方针',items:[
-   ['节流清欠','削减非必要开支、清理积欠，财政稳步改善。',function(x){gAdd('财政',5);gAdd('民心',1);gAdd('军事',-1);}],
-   ['增加商税与厘金','扩大税源，短期收入增加，但商民负担加重。',function(x){var c=Math.round(rnd(160,360));x.cash+=c;gAdd('财政',5);gAdd('民心',-3);}],
-   ['拨款兴办实业','投入工矿、交通与生产建设，见效较慢。',function(x){var c=Math.min(x.cash||0,180);x.cash-=c;gAdd('工业',5);gAdd('经济',3);gAdd('财政',-2);addExp('fame',2);}]
+  treasury:{title:'财政方针',items:[
+   ['节流清欠','削减非必要开支、清理积欠，财政稳步改善。',15,function(x){gAdd('财政',4);gAdd('民心',1);gAdd('军事',-1);var c=stateRev()*0.015;stateRes(c);return '各衙门裁撤冗费，年省约 '+M(c*1e4)+'。';}],
+   ['增加商税与厘金','扩大税源，短期收入增加，但商民负担加重。',15,function(x){var c=stateRev()*0.03;stateRes(c);gAdd('财政',4);gAdd('民心',-3);return '新增厘卡与商税，国库进项约 '+M(c*1e4)+'，商民怨声四起。';}],
+   ['拨款兴办实业','投入工矿、交通与生产建设，约一年见效；同一时间只能主持一项。',10,null]
   ]},
-  tour:{title:'本年出巡安排',items:[
-   ['深入灾区与基层','查看民情、处理积案，改善地方治理。',function(x){gAdd('民心',4);gAdd('秩序',3);addExp('fame',3);}],
-   ['巡视军营与边防','检查军备和军纪，提振军心。',function(x){gAdd('军事',3);gAdd('秩序',2);addExp('trust',2);}],
-   ['举行公开典礼','展示权威、安定人心，但实际问题解决有限。',function(x){gAdd('稳定',3);gAdd('民心',2);addExp('fame',4);}]
+  tour:{title:'出巡安排',items:[
+   ['深入灾区与基层','查看民情、处理积案，改善地方治理。',45,function(x){gAdd('民心',4);gAdd('秩序',3);addExp('fame',3);x.health=clamp((x.health||100)-2);return '沿途见了饿殍，也开了仓。';}],
+   ['巡视军营与边防','检查军备和军纪，提振军心。',45,function(x){gAdd('军事',3);gAdd('秩序',2);addExp('trust',2);return '各营列队受阅，军心一振。';}],
+   ['举行公开典礼','展示权威、安定人心，但实际问题解决有限。',20,function(x){gAdd('稳定',3);gAdd('民心',2);addExp('fame',4);stateRes(-stateRev()*0.003);return '典礼办得体面，花费不小。';}]
   ]},
-  office:{title:'本年公务重点',items:[
-   ['清理积案、提高行政效率','集中处理诉讼、文书与积压公务，改善行政秩序。',function(x){gAdd('秩序',4);addExp('skill',3);addExp('trust',2);}],
-   ['赈济与修缮地方','组织粮食救济、修桥补路，改善民生。',function(x){gAdd('民心',4);gAdd('秩序',2);gAdd('财政',-2);addExp('fame',3);}],
-   ['清查田赋与地方账目','核实税册、追查亏空，增加财政但可能得罪人。',function(x){gAdd('财政',4);gAdd('秩序',2);gAdd('民心',-1);addExp('power',2);}]
+  office:{title:'公务重点',items:[
+   ['清理积案、提高行政效率','集中处理诉讼、文书与积压公务。',15,function(x){gAdd('秩序',1);addExp('skill',4);addExp('trust',3);return '案上的事清了大半。';}],
+   ['赈济与修缮地方','动用公费组织救济、修桥补路。',20,function(x){var c=Math.min(x.fund||0,[2,5,15,40,120,300,800,2000][R_(x)]);x.fund=(x.fund||0)-c;gAdd('民心',1);addExp('fame',4);return c>0?'动用公费 '+M(c)+'，修了桥，搭了粥棚。':'公费见底，只能动员乡里出工出料。';}],
+   ['清查田赋与地方账目','核实税册、追查亏空，可能得罪人；按例有些规费。',20,function(x){gAdd('财政',1);addExp('power',3);var f=pay(x,sideFee(x)*rnd(0.3,0.8));return '查出几处隐田，按例得规费 '+M(f)+'。';}]
   ]},
-  lobby:{title:'本年交际方向',items:[
-   ['拜访同僚与上级','经营官场关系，争取支持。',function(x){addExp('trust',4);addExp('power',2);}],
-   ['联络地方士绅','争取地方社会支持，改善治理协作。',function(x){gAdd('秩序',2);gAdd('民心',2);addExp('fame',2);}],
-   ['结交改革派与实务人才','扩大政策与专业人脉，增加政治影响。',function(x){addExp('power',4);addExp('skill',2);addExp('trust',-1);}]
+  lobby:{title:'交际方向',items:[
+   ['拜访同僚与上级','经营官场关系，争取支持。',10,function(x){x.supRel=clamp(supRel()+Math.round(rnd(3,7)));addExp('trust',4);addExp('power',2);var c=giftCost(R_(x))*0.3;x.cash=Math.max(0,(x.cash||0)-c);return '递了帖子，吃了几席酒，花去 '+M(c)+'。';}],
+   ['联络地方士绅','争取地方社会支持，结识一位士绅。',10,function(x){var p=netAdd('gentry');addExp('fame',2);return p?'在祠堂议事时结识了'+p+'。':'几位士绅客气地应付了你。';}],
+   ['结交改革派与实务人才','扩大政策与专业人脉，增加政治影响。',12,function(x){var p=netAdd('scholar');addExp('power',4);addExp('skill',2);return p?'与'+p+'谈了半夜新政。':'新派的人对你还有戒心。';}]
   ]},
-  petition:{title:'本年上呈主张',items:[
-   ['请求减税赈灾','向上级提出减免赋税、赈济灾民的方案。',function(x){gAdd('民心',4);gAdd('财政',-2);addExp('fame',2);}],
-   ['建议整顿吏治','提出考核官员、清查地方弊政的办法。',function(x){gAdd('秩序',3);addExp('power',3);addExp('trust',-1);}],
-   ['建议兴学与实业','推动学校、工厂和交通建设。',function(x){gAdd('工业',2);gAdd('经济',2);addExp('skill',3);addExp('power',2);}]
+  petition:{title:'上呈主张',items:[
+   ['请求减税赈灾','向上级提出减免赋税、赈济灾民的方案。',10,function(x){gAdd('民心',1);addExp('fame',3);return '折子递上去，批了“知道了”。';}],
+   ['建议整顿吏治','提出考核官员、清查地方弊政的办法。',10,function(x){gAdd('秩序',1);addExp('power',3);addExp('trust',-1);return '上面留中不发，同僚看你的眼神变了。';}],
+   ['建议兴学与实业','推动学校、工厂和交通建设。',10,function(x){addExp('skill',3);addExp('power',2);return '条陈写了万余字，被人传抄。';}]
   ]},
-  inspect:{title:'本年巡查重点',items:[
-   ['巡查仓储与粮价','核验粮仓、平抑粮价，防止灾年失控。',function(x){gAdd('民心',3);gAdd('秩序',3);}],
-   ['检查税务与账册','查清税收流失和账目问题。',function(x){gAdd('财政',4);gAdd('秩序',2);}],
-   ['走访军营与基层','听取基层官兵和百姓意见。',function(x){gAdd('军事',2);gAdd('民心',2);addExp('fame',2);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+3);}]
+  inspect:{title:'巡查重点',items:[
+   ['巡查仓储与粮价','核验粮仓、平抑粮价，防止灾年失控。',20,function(x){gAdd('民心',1);gAdd('秩序',1);addExp('fame',2);return '仓里的米数与册上对得上。';}],
+   ['检查税务与账册','查清税收流失和账目问题。',20,function(x){gAdd('财政',1);addExp('power',2);addExp('skill',2);return '亏空比册上多三成，县官跪着不敢抬头。';}],
+   ['走访军营与基层','听取基层官兵和百姓意见。',20,function(x){addExp('fame',3);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+3);return '听了一肚子牢骚，也记下了几个名字。';}]
   ]},
-  earn:{title:'本年谋生方式',items:[
-   ['经营买卖','投入时间经营货物，争取一笔收入。',function(x){var n=Math.round(rnd(18,55));x.cash+=n;addExp('skill',1);}],
-   ['承办差事','接些文书、账务或跑腿差事，收入较稳。',function(x){var n=Math.round(rnd(12,36));x.cash+=n;addExp('trust',1);}],
-   ['拓展长期门路','花些钱打通渠道，为后续经营铺路。',function(x){if(x.cash<20){flash('银钱不足，至少需要20两');return false;}x.cash-=20;addExp('power',2);addExp('fame',2);}]
+  earn:{title:'谋生方式',items:[
+   ['经营买卖','押上手头现银跑一趟货，赚赔各凭行情与眼光。',30,function(x){var cap=Math.min(Math.max(0,x.cash||0),earnCap(x));if(cap<1){flash('本钱不足：至少要有 '+M(1)+' 现银才能押货');return false;}var r=rnd(-0.12,0.14)+(+x.skill||0)/1000+(window.__netHas&&window.__netHas('deal',60)?0.02:0);var g=Math.round(cap*r*100)/100;x.cash+=g;addExp('skill',3);return '押货 '+M(cap)+'，'+(g>=0?'净赚 '+M(g):'折本 '+M(-g))+'。';}],
+   ['承办差事','接些文书、账务或跑腿差事，收入较稳。',15,function(x){var f=pay(x,sideFee(x)*rnd(0.7,1.3)*skillF(x));addExp('trust',2);return '差事办完，得 '+M(f)+'。';}],
+   ['拓展长期门路','备礼请客，结识一位商界朋友，为后续经营铺路。',20,function(x){var c=giftCost(R_(x));if(!spend(x,c,'备礼不够'))return false;var p=netAdd('merchant');addExp('power',2);addExp('fame',2);return '花去 '+M(c)+' 请客送礼'+(p?'，结识了'+p:'')+'。';}]
   ]},
-  work:{title:'本年做工选择',items:[
-   ['进作坊做工','收入稳定，生活压力较小。',function(x){x.cash+=Math.round(rnd(12,28));addExp('skill',2);}],
-   ['外出承揽短工','收入可能更高，但也更辛苦。',function(x){x.cash+=Math.round(rnd(8,42));addExp('skill',2);}],
-   ['学一门手艺','今年收入不多，换取能力提升。',function(x){addExp('skill',4);}]
+  work:{title:'做工',items:[
+   ['进作坊做工','按日计工钱，收入稳定，生活压力较小。',15,function(x,d){var w=pay(x,d*0.09*skillF(x));addExp('skill',2);return '做满 '+d+' 天，工钱 '+M(w)+'。';}],
+   ['外出承揽短工','码头、工地、车行的短工，工钱高低不定，也伤身子。',10,function(x,d){var w=d*rnd(0.04,0.18);var cheat=Math.random()<0.15;if(cheat)w*=0.3;pay(x,w);x.health=clamp((x.health||100)-1);addExp('skill',2);return (cheat?'工头卷了半数工钱，只拿到 ':'挣得 ')+M(w)+'。';}],
+   ['学一门手艺','跟师傅当学徒，只有很少的饭钱，换来手艺。',30,function(x,d){var w=pay(x,d*0.02);addExp('skill',10);return '学了 '+d+' 天，手上有了准头；饭钱 '+M(w)+'。';}]
   ]},
-  gossip:{title:'本年打听消息',items:[
-   ['打听官府动向','了解地方政策、官员更替与政局变化。',function(x){addExp('power',2);addExp('skill',1);}],
-   ['打听市场行情','了解物价、货源和商路消息。',function(x){x.cash+=Math.round(rnd(4,16));addExp('skill',2);}],
-   ['打听社会民情','了解乡里矛盾、灾情与百姓诉求。',function(x){gAdd('民心',1);addExp('fame',2);}]
+  gossip:{title:'打听消息',items:[
+   ['打听官府动向','了解地方政策、官员更替与政局变化。',5,function(x){x.cash=Math.max(0,(x.cash||0)-0.05);addExp('power',2);var i=netInfoLine(x);return '在茶馆坐了几天（茶钱 '+M(0.05)+'）。'+(i||'听到的多是捕风捉影。');}],
+   ['打听市场行情','了解物价、货源和商路消息。',5,function(x){var g=pay(x,rnd(0.05,0.4)*(R_(x)+1));addExp('skill',2);return '摸清了几样货的行情，转手赚了 '+M(g)+'。';}],
+   ['打听社会民情','了解乡里矛盾、灾情与百姓诉求。',5,function(x){addExp('fame',2);return '乡里人愿意跟你说实话了。';}]
   ]},
-  befriend:{title:'本年结交对象',items:[
-   ['结交同乡','经营乡里关系，遇事多一条门路。',function(x){addExp('trust',3);addExp('fame',1);}],
-   ['结交读书人与教员','扩大知识与信息来源。',function(x){addExp('skill',3);addExp('power',1);}],
-   ['结交商贾与行会','拓展生意和社会资源。',function(x){x.cash+=Math.round(rnd(5,20));addExp('power',2);}]
+  befriend:{title:'结交',items:[
+   ['结交同乡','经营乡里关系，遇事多一条门路。',7,function(x){var c=giftCost(R_(x))*0.3;x.cash=Math.max(0,(x.cash||0)-c);var p=netAdd('tongxiang');addExp('trust',2);return '请了一桌（'+M(c)+'），'+(p?'和'+p+'攀上了乡谊。':'只喝出个面熟。');}],
+   ['结交读书人与教员','扩大知识与信息来源。',7,function(x){var p=netAdd('scholar');addExp('skill',2);return p?'在书肆里认识了'+p+'。':'读书人对你客气而疏远。';}],
+   ['结交商贾与行会','拓展生意和社会资源。',7,function(x){var c=giftCost(R_(x))*0.3;x.cash=Math.max(0,(x.cash||0)-c);var p=netAdd('merchant');addExp('power',2);return '酒席花去 '+M(c)+(p?'，结识了'+p+'。':'。');}]
   ]},
-  drill:{title:'本年操练计划',items:[
-   ['加强队列与纪律','提升基本训练和组织能力。',function(x){addExp('skill',3);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+3);}],
-   ['练习射击与战术','专注实战技能，消耗一些军费。',function(x){addExp('skill',4);gAdd('军事',1);}],
-   ['整顿营务与装备','改善军需和队伍管理。',function(x){gAdd('军事',2);gAdd('财政',-1);addExp('trust',2);}]
+  drill:{title:'操练',items:[
+   ['加强队列与纪律','提升基本训练和组织能力。',20,function(x){addExp('skill',4);if(x.unit)x.unit.mor=clamp((x.unit.mor||50)+3);return '操场上站了一阵，队列像样了。';}],
+   ['练习射击与战术','专注实战技能，消耗一些弹药。',20,function(x){var c=0.3*(R_(x)+1);if((x.fund||0)>=c)x.fund-=c;else x.cash=Math.max(0,(x.cash||0)-c);addExp('skill',6);gAdd('军事',1);return '打掉弹药约 '+M(c)+'，准头稳了。';}],
+   ['整顿营务与装备','改善军需和队伍管理。',30,function(x){addExp('trust',4);if(x.unit)x.unit.sup=clamp((x.unit.sup||50)+4);return '账目与军械清点了一遍。';}]
   ]},
-  rest:{title:'本年休整安排',items:[
-   ['在家休养','恢复身体，减少风险。',function(x){x.health=clamp((x.health||100)+8);}],
-   ['陪伴家人','稳住家庭生活与个人状态。',function(x){x.health=clamp((x.health||100)+5);addExp('trust',1);}],
-   ['闭门读书','休整同时补充知识。',function(x){x.health=clamp((x.health||100)+3);addExp('skill',2);}]
+  drillCivil:{title:'强身习武',items:[
+   ['习拳练武','每天早起练拳脚，强身健体。',20,function(x){x.health=clamp((x.health||100)+3);addExp('skill',3);return '练了些日子，身子骨硬朗了些。';}],
+   ['学骑射与枪法','花钱买些弹药，跟老兵学放枪。',20,function(x){if(!spend(x,0.5,'弹药钱不够'))return false;addExp('skill',5);return '花了 '+M(0.5)+' 的弹药，打得准了。';}],
+   ['结伴晨练','和熟人一起练，顺便拉近关系。',15,function(x){x.health=clamp((x.health||100)+2);var n=window.__netTouch?window.__netTouch(4):'';addExp('trust',1);return n?'和'+n+'天天在河边练拳，熟络了。':'一个人练了半月。';}]
+  ]},
+  rest:{title:'休整',items:[
+   ['在家休养','恢复身体，减少风险。',10,function(x){x.health=clamp((x.health||100)+8);return '睡足了觉，精神回来了。';}],
+   ['陪伴家人','稳住家庭生活与个人状态。',15,function(x){x.health=clamp((x.health||100)+5);addExp('trust',1);return '陪家里人过了些日子。';}],
+   ['闭门读书','休整同时补充知识。',20,function(x){x.health=clamp((x.health||100)+3);addExp('skill',4);return '读完了两部书。';}]
+  ]},
+  study:{title:'进修',items:[
+   ['读书进修','经史或新学，按部就班地读。',30,function(x){addExp('skill',8);return '读完了几部书，笔记写了半本。';}],
+   ['投考学堂 / 拜师','交束脩或学费，换取系统的学习。',60,function(x){var c=[1,3,6,10,15,20,30,40][R_(x)];if(!spend(x,c,'学费不够'))return false;addExp('skill',14);addExp('fame',2);return '交了 '+M(c)+' 的学费，学得扎实。';}],
+   ['译书写稿','替书局译书、给报馆写稿，挣些稿费。',20,function(x,d){var w=pay(x,d*0.06*skillF(x));addExp('fame',3);addExp('skill',2);return '稿费 '+M(w)+'，文章也有人读了。';}]
+  ]},
+  organize:{title:'组织活动',items:[
+   ['散发传单','夜里张贴、散发传单，名声起来，风险也大。',10,function(x){addExp('fame',5);addExp('power',2);var r=window.__netRisk?window.__netRisk(0.12,'散发传单被巡警盯上'):'';return '传单贴满了三条街。'+(r||'');}],
+   ['联络同志','串联可靠的人，结识一位同志。',15,function(x){var p=netAdd('comrade');addExp('power',3);x.clubRel=clamp((x.clubRel||50)+3);return p?'经人介绍，与'+p+'接上了头。':'几处联络点都断了线。';}],
+   ['募集经费','向同情者募款，大部分交组织，自己留些路费。',20,function(x){var g=rnd(1,4)*(R_(x)+1);var keep=Math.round(g*0.2*100)/100;x.cash+=keep;x.fund=(x.fund||0)+g-keep;x.clubRel=clamp((x.clubRel||50)+4);addExp('fame',2);return '募得 '+M(g)+'，交组织 '+M(g-keep)+'，留路费 '+M(keep)+'。';}]
   ]}
  };
- var annualNames={memorial:'批折子',appoint:'用人',mobilize:'调兵',treasury:'开库',tour:'出巡',office:'办公',lobby:'交际',petition:'递折子',inspect:'巡查',earn:'谋生',work:'做工',gossip:'打听',befriend:'结交',drill:'操练',rest:'歇着'};
- function allowed(k,x){
-  var leader=!!(x.isThrone||x.isLeader),official=x.role==='official',merchant=x.role==='merchant',military=x.role==='soldier'||x.role==='officer';
-  if(['memorial','appoint','mobilize','treasury','tour'].indexOf(k)>=0&&!leader){flash('权限不足：此项属于国家最高决策权');return false;}
-  if(k==='office'&&!(official||merchant||leader)){flash('权限不足：你当前身份不能办理这类公务');return false;}
-  if(k==='drill'&&!military){flash('你没有军队身份，不能进行军事操练');return false;}
-  return true;
+ var annualNames={memorial:'批折子',appoint:'用人',mobilize:'调兵',treasury:'开库',tour:'出巡',office:'办公',lobby:'交际',petition:'递折子',inspect:'巡查',earn:'谋生',work:'做工',gossip:'打听',befriend:'结交',drill:'操练',rest:'休整',study:'进修',organize:'组织'};
+ function isMilX(x){ return x.role==='soldier'||x.role==='officer'; }
+ function cfgOf(k,x){ if(k==='drill'&&!isMilX(x)) return annualChoices.drillCivil; return annualChoices[k]; }
+ /* 权限：返回 null 表示可以做，否则返回原因（界面上会把按钮置灰并写明原因） */
+ function denyReason(k,x){
+  var leader=!!(x.isThrone||x.isLeader),official=x.role==='official',merchant=x.role==='merchant';
+  if(['memorial','appoint','mobilize','treasury','tour'].indexOf(k)>=0&&!leader) return '此项属于国家最高决策权';
+  if(k==='office'&&!(official||merchant||leader)) return '你当前身份不能办理这类公务';
+  if(x.cal&&x.cal.finished) return '本局已在1972年末结算';
+  if(x.dead) return '人已不在';
+  return null;
  }
- /* V4.18：取消年度行动点。每个事项独立冷却；部分事项是持续行动，到期自动结算。
-    ONGOING 中的事项：选择后先开工，效果在完成日结算（只结算一次，存档可恢复）。 */
- var GOV_COOL={memorial:20,appoint:60,mobilize:45,treasury:60,tour:45,office:15,lobby:20,petition:45,inspect:20,earn:10,work:7,gossip:5,befriend:12,drill:30,rest:10};
- var ONGOING={tour:{days:45,label:'出巡'},inspect:{days:20,label:'巡查'},drill:{days:30,label:'操练'},rest:{days:10,label:'休整'}};
- /* 拨款兴办实业：大型建设，先付钱，约一年后才见效。 */
- var BUILD={k:'treasury',i:2,days:360,label:'兴办实业（工矿与交通建设）'};
+ function allowed(k,x){ var r=denyReason(k,x); if(r){ flash('权限不足：'+r); return false; } return true; }
+ window.__actDeny=function(k){ var x=S_(); return x?denyReason(k,x):null; };
+ function S_(){ return window.__S?window.__S():null; }
+ /* 每个事项的天数范围（按钮上显示“约 N 天”） */
+ var GOV_DAYS={};
+ Object.keys(annualChoices).forEach(function(k){ var ds=annualChoices[k].items.map(function(it){return it[2];}); GOV_DAYS[k]=[Math.min.apply(null,ds),Math.max.apply(null,ds)]; });
+ GOV_DAYS.drill=[15,30];
+ var BUILD_DAYS=360;
  JOB_FX.menu=function(x,job){
   var d=job.data||{},cfg=annualChoices[d.k],it=cfg&&cfg.items[d.i];
-  if(!it)return '';
-  it[2](x);
+  if(!it||!it[3])return '';
+  it[3](x,0);
   return it[0]+' 已见成效';
  };
  JOB_FX.build=function(x,job){
   gAdd('工业',5);gAdd('经济',3);addExp('fame',2);
   return '工厂与道路陆续投产，工业与经济上升';
  };
- window.__GOV_COOL=GOV_COOL;window.__GOV_ONGOING=ONGOING;
+ window.__GOV_COOL=GOV_DAYS;window.__GOV_DAYS=GOV_DAYS;window.__GOV_ONGOING={};
  function govLabel(k){return annualNames[k]||'此事';}
+ window.__govLabel=govLabel;
+ function buildBusy(){ var x=S_(); if(!x||!Array.isArray(x.jobs)) return null; for(var i=0;i<x.jobs.length;i++){ if(x.jobs[i].fx==='build') return x.jobs[i]; } return null; }
  function openMenu(k){
   if(!s)return;
   if(!allowed(k,s))return;
   if(!actGate('gov:'+k,govLabel(k)))return;
-  var cfg=annualChoices[k];if(!cfg){flash('这个行动暂时没有可选方案');return;}
+  var cfg=cfgOf(k,s);if(!cfg){flash('这个行动暂时没有可选方案');return;}
   var mask=document.getElementById('mask'),tag=document.getElementById('dlgTag'),title=document.getElementById('dlgTitle'),desc=document.getElementById('dlgDesc'),body=document.getElementById('dlgBody');
   if(!mask||!body)return;
-  var og=ONGOING[k];
   tag.textContent='行动决策 · '+calFmt(calToday());
-  title.textContent=cfg.title.replace(/^本年/,'');
-  desc.textContent=og?('这是持续行动：确认后开始，约 '+actDays(og.days)+' 个游戏日后自动结算效果；期间其他事务照常进行。')
-   :('确认后立即生效，此后约 '+actDays(GOV_COOL[k]||15)+' 个游戏日内不能再办同一件事。其他事务各自计算冷却。');
+  title.textContent=cfg.title;
+  desc.textContent='选定后立即办理，日历随之推进相应天数（天数随能力、职位、人脉与时局浮动）；期间生活开销照常扣除，历史事件照常发生。';
   body.innerHTML='';
   cfg.items.forEach(function(it,i){
    var b=document.createElement('button');b.className='choice';b.style.marginBottom='8px';
-   var isBuild=(k===BUILD.k&&i===BUILD.i);
-   var extra=isBuild?'<div class="chance">持续行动：约 '+actDays(BUILD.days)+' 天建成，先拨付银钱</div>':'';
+   var isBuild=(k==='treasury'&&i===2);
+   var days=isBuild?it[2]:dayCost('gov:'+k,it[2]);
+   var bb=isBuild?buildBusy():null;
+   var extra=isBuild?('<div class="chance">筹办约 '+days+' 天；工程约 '+actDays(BUILD_DAYS)+' 天建成，先从国库拨付约 '+M(stateRev()*0.05*1e4)+'</div>'):('<div class="chance">约 '+days+' 天</div>');
+   if(bb){ extra+='<div class="chance" style="color:var(--red)">已有一项工程在建，预计 '+calFmtOrd(bb.end)+' 完工</div>'; b.disabled=true; }
    b.innerHTML='<b>'+it[0]+'</b><div class="small muted" style="margin-top:4px">'+it[1]+'</div>'+extra;
    b.onclick=function(){
     if(!s||!actGate('gov:'+k,govLabel(k))){mask.classList.add('hidden');return;}
-    var j=null;
     if(isBuild){
-     var c=Math.min(s.cash||0,180);s.cash-=c;gAdd('财政',-2);
-     j=jobStart('gov:'+k,{label:BUILD.label,days:BUILD.days,fx:'build',data:{k:k,i:i,paid:c}});
-     log('【'+govLabel(k)+'】拨银 '+c+' 两兴办实业，预计 '+calFmtOrd(j.end)+' 建成。');
-    }else if(og){
-     j=jobStart('gov:'+k,{label:og.label+'：'+it[0],days:og.days,fx:'menu',data:{k:k,i:i}});
-     log('【'+govLabel(k)+'】开始：'+it[0]+'，预计 '+calFmtOrd(j.end)+' 完成。');
+     if(buildBusy()){ flash('已有一项工程在建'); return; }
+     var c=stateRev()*0.05; stateRes(-c); gAdd('财政',-2);
+     s.jobSeq=(s.jobSeq||0)+1;
+     var j=jobStart('build:'+s.jobSeq,{label:'兴办实业（工矿与交通建设）',days:BUILD_DAYS,fx:'build',data:{k:k,i:i,paid:c}});
+     actCool('gov:'+k,it[2]);
+     log('【'+govLabel(k)+'】从国库拨付约 '+M(c*1e4)+' 兴办实业，预计 '+calFmtOrd(j.end)+' 建成。');
     }else{
-     var result=it[2](s);
+     var d=dayCost('gov:'+k,it[2]);
+     var result=it[3](s,d);
      if(result===false){return;}
-     var n=actCool('gov:'+k,GOV_COOL[k]||15);
-     log('【'+govLabel(k)+'】'+it[0]+'。（'+n+' 天后可再办）');
+     actCool('gov:'+k,it[2]);
+     log('【'+govLabel(k)+'】'+it[0]+(typeof result==='string'&&result?'：'+result:'。'));
     }
     s.lastAnnualChoice={year:s.year,ord:calTodayOrd(),action:k,choice:it[0]};
     mask.classList.add('hidden');
@@ -5376,6 +5574,7 @@ setTimeout(installConstitutionEntry,500);
   mask.classList.remove('hidden');
  }
  doGovern=function(k){openMenu(k);};
+
 
  // 去掉界面上的经验条和经验数字，属性数值直接显示。
  var st=document.createElement('style');
@@ -5793,7 +5992,7 @@ setTimeout(installConstitutionEntry,500);
    var join=document.createElement('button');join.className='btn sm';join.textContent=p.aligned===f.id?'当前依靠派系':'转而依靠该派系';join.disabled=p.aligned===f.id||!!actBusy('fac:align');if(p.aligned!==f.id&&actBusy('fac:align'))join.textContent+='（'+actBusyText(actBusy('fac:align'))+'）';join.onclick=function(){if(!actGate('fac:align','转投派系'))return;actCool('fac:align',60);var old=actualGroup(x);old.loyalty=clamp(old.loyalty-4,0,100);p.aligned=f.id;f.loyalty=clamp(f.loyalty+8,0,100);f.support=clamp(f.support+3,0,100);x.power=clamp(x.power+2,0,100);addHistory(p,'你转而依靠「'+f.name+'」，原有盟友关系受到影响。');note('【派系交涉】你转而依靠「'+f.name+'」。');save();draw();openPanel();};row.appendChild(join);body.appendChild(row);});
   var ph=document.createElement('div');ph.className='constitution-group';ph.innerHTML='<b>职位与任免</b><p class="small muted">席位空缺、现任者、所属派系都会影响竞争。职位竞争成功才会实际占据席位。</p>';body.appendChild(ph);
   p.positions.forEach(function(pos){var line=document.createElement('div');line.className='small';var faction=p.factions.filter(function(f){return f.id===pos.factionId;})[0];line.style.margin='7px 0';line.innerHTML='<b>'+esc(pos.name)+'</b>（第'+pos.rank+'级） · '+(pos.vacant?'<span style="color:var(--red)">空缺</span>':'现任：'+esc(pos.incumbent||'未知'))+' · '+esc(faction?faction.name:'未归属');ph.appendChild(line);});
-  var actions=document.createElement('div');actions.className='constitution-group';actions.innerHTML='<b>政治行动（各项独立冷却，按游戏日计算）</b>';body.appendChild(actions);
+  var actions=document.createElement('div');actions.className='constitution-group';actions.innerHTML='<b>政治行动（每项按天耗时，确认后日历推进）</b>';body.appendChild(actions);
   function btn(label,desc,fn,disabled,key){var bz=key?actBusy(key):null;var b=document.createElement('button');b.className='choice';b.disabled=!!disabled||!!bz;b.innerHTML='<b>'+label+'</b><div class="sub">'+desc+'</div>'+(bz?'<div class="chance" style="color:var(--red)">'+actBusyText(bz)+'</div>':'');b.onclick=fn;actions.appendChild(b);}
   btn('经营派系、扩大支持','召开会议、发展成员、协调资源。不同身份的组织能力不同。',function(){action('organize');},!eligible(x,'organize'),'fac:organize');
   var candidate=p.positions.filter(function(q){var spec=POSITIONS.filter(function(z){return z.id===q.id;})[0];return spec&&spec.roles.indexOf(role(x))>=0&&q.rank<=(x.rank||0)+1&&q.id!=='chief';}).sort(function(a,b){return a.rank-b.rank;})[0];
@@ -6139,7 +6338,7 @@ function calReportHTML(r){
  h+='<div class="yr-sec"><b>个人变化</b><div class="yr-grid">'+
   '<span>能力 '+Math.round(A.skill)+' '+dl(B.skill,A.skill)+'</span><span>声望 '+Math.round(A.fame)+' '+dl(B.fame,A.fame)+'</span>'+
   '<span>政治 '+Math.round(A.power)+' '+dl(B.power,A.power)+'</span><span>信任 '+Math.round(A.trust)+' '+dl(B.trust,A.trust)+'</span>'+
-  '<span>银钱 '+A.cash+' 两 '+dl(B.cash,A.cash)+'</span><span>影响 '+A.alt+' '+dl(B.alt,A.alt)+'</span></div>'+
+  '<span>现银 '+M(A.cash)+' '+dl(B.cash,A.cash)+'</span><span>影响 '+A.alt+' '+dl(B.alt,A.alt)+'</span></div>'+
   (A.title!==B.title?'<p class="small">职位：'+B.title+' → <b>'+A.title+'</b></p>':'<p class="small muted">职位：'+A.title+'</p>')+'</div>';
  if(r.events.length) h+='<div class="yr-sec"><b>本年抉择</b><ul>'+r.events.map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
  if(r.big.length) h+='<div class="yr-sec"><b>本年纪事</b><ul>'+r.big.map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
@@ -6172,7 +6371,7 @@ function calFinal(){
  var lv=s.alt>=20?'历史改写者':s.alt>=12?'历史的参与者':s.alt>=5?'时代的见证者':'时代的过客';
  var sum=['能力 '+s.skill+'、声望 '+s.fame+'、政治 '+s.power+'、上级信任 '+s.trust,
   '职位：'+rep.after.title+(s.clique?'（'+s.clique+'）':''),
-  '银钱 '+Math.round(s.cash)+' 两，历史影响 '+s.alt+'（'+lv+'）',
+  '现银 '+M(s.cash)+'，历史影响 '+s.alt+'（'+lv+'）',
   '亲历并作出抉择的历史事件 '+(s.histRec||[]).length+' 件，经历年度结算 '+s.yearReports.length+' 次'];
  s.ending={t:v.t,d:'1972年12月31日，'+(v.d||''),sum:sum,final:true};
  s.cal.finalEnding=s.ending;
@@ -6445,4 +6644,927 @@ setTimeout(calBindUI,0);
 document.addEventListener('DOMContentLoaded',calBindUI);
 window.addEventListener&&window.addEventListener('resize',function(){ try{ calLayout(); }catch(e){} });
 
+/* ================= V4.18.5：时间成本、结果提示、生计收支、关系网、分页 =================
+   1) 取消冷却：每个行动显示“约 N 天”，确认后日历立刻按天推进 N 天（逐日走同一条每日/每月/年末管线）。
+      推进途中若弹出历史抉择或年度报告，推进停在当天；处理完弹窗后自动接着走完剩余天数，所以每个行动耗时恒为 N 天。
+   2) 每次行动/抉择后弹出结果：耗时、起止日期、收入、支出、属性与关系变化——全部由前后状态比对得出。
+   3) 生计：每月 1 日按身份、品级、地区、家口结算上月俸饷与开销；入不敷出转为欠债，欠债有利息与后果。
+   4) 关系网：拜访、送礼、请托、引荐、借贷、求情；关系影响晋升、办事效率、消息、庇护与借款；人会记得你做过的事；久不往来会淡。 */
+
+/* ---------- 0. 小工具 ---------- */
+var V4185=true;
+function _r2(v){ return Math.round((+v||0)*100)/100; }
+function econEnsure(x){
+ x=x||s; if(!x) return null;
+ if(!x.econ||typeof x.econ!=='object') x.econ={};
+ var E=x.econ;
+ if(typeof E.debt!=='number'||!isFinite(E.debt)) E.debt=0;
+ if(!Array.isArray(E.loans)) E.loans=[];
+ if(!Array.isArray(E.hist)) E.hist=[];
+ if(typeof E.brokeMonths!=='number') E.brokeMonths=0;
+ if(!E.state||typeof E.state.res!=='number') E.state={res:Math.round(refAt(REF_REV,x.year||1840)*0.25)};
+ return E;
+}
+function loanTotal(x){ x=x||s; var t=0; ((x&&x.econ&&x.econ.loans)||[]).forEach(function(l){ t+=+l.amt||0; }); return t; }
+function stateRev(){ return refAt(REF_REV,(s&&s.year)||1840); }
+function stateRes(d){ var E=econEnsure(s); if(!E) return 0; E.state.res=Math.round((E.state.res+(+d||0))*10)/10; return E.state.res; }
+window.__stateRev=stateRev; window.__stateRes=stateRes;
+
+/* ---------- 1. 时间成本：各类行动的天数 ---------- */
+var DUR_FIX={
+ 'meet:visit':3,'meet:learn':7,'meet:work':15,'sup:visit':2,'sup:gift':2,'sup:ask':5,
+ 'club:act':7,'club:donate':1,'club:arm':15,'unit:rec':20,'unit:drill':30,'unit:fight':45,'clique':10,
+ 'rel:gift':2,'rel:talk':3,'rel:stand':5,'pw:talk':20,'pw:loan':60,'pw:buy':45,'pw:war':10,
+ 'country:attack':60,'country:settle':30,'region':30,'gov:appoint':15,'gov:mobilize':20,'cons:propose':30,
+ 'order:rebel':5,'order:exec':30,'fac:organize':20,'fac:contest':30,'fac:reconcile':20,'fac:split':30,'fac:succession':30,'fac:align':10,
+ 'act':15,'net:visit':3,'net:gift':2,'net:favor':7,'net:intro':10,'net:loan':3,'net:plead':10,'net:repay':2,'promote':3
+};
+var DUR_LABEL={
+ 'meet:visit':'拜访','meet:learn':'请教','meet:work':'共事','sup:visit':'拜访上级','sup:gift':'给上级送礼','sup:ask':'请示提拔',
+ 'club:act':'会中办事','club:donate':'捐输','club:arm':'联络新军','unit:rec':'招募','unit:drill':'部队操练','unit:fight':'开拔作战','clique':'改投派系',
+ 'rel:gift':'送礼','rel:talk':'深谈','rel:stand':'公开表态','pw:talk':'交涉','pw:loan':'借款','pw:buy':'购械','pw:war':'宣战/和谈',
+ 'country:attack':'用兵','country:settle':'设治抚民','region':'整饬防务','cons:propose':'递交宪制建议','order:rebel':'签发平乱军令','order:exec':'执行平乱军令',
+ 'fac:organize':'经营派系','fac:contest':'竞争职位','fac:reconcile':'协商和解','fac:split':'推动分裂','fac:succession':'权力更迭','fac:align':'转投派系',
+ 'net:visit':'拜访','net:gift':'送礼','net:favor':'请托','net:intro':'请人引荐','net:loan':'借贷','net:plead':'求情','net:repay':'还钱','war:cmd':'前线指挥','promote':'打点升迁'
+};
+var SOCIAL_KEYS=/^(gov:(lobby|befriend|gossip|earn|petition|office)|net:|meet:|sup:)/;
+function durKey(key){
+ key=String(key||'');
+ var p=key.split(':');
+ if(p.length>=2&&DUR_FIX[p[0]+':'+p[1]]!==undefined) return p[0]+':'+p[1];
+ if(DUR_FIX[p[0]]!==undefined) return p[0];
+ return null;
+}
+/* 人脉越广，跑关系、打听、做买卖越省时间：关系 ≥70 的熟人每人 −3%，最多 −15% */
+var NET_ALLY_MEMO=null;   /* 界面批量标注天数时缓存一次，避免每个按钮都遍历关系网 */
+function netSpeed(key){
+ if(!SOCIAL_KEYS.test(String(key||''))) return 1;
+ var a=NET_ALLY_MEMO!==null?NET_ALLY_MEMO:netAllies(70);
+ return 1-Math.min(0.15,0.03*a);
+}
+/* 实际耗时（天）：基准天数 × 能力/职位/时局系数（actFactor）× 人脉系数 */
+function dayCost(key,base){
+ var dk=durKey(key);
+ var b=(dk&&String(key).indexOf('gov:')!==0)?DUR_FIX[dk]:(+base||(dk?DUR_FIX[dk]:15));
+ if(String(key).indexOf('war:cmd')===0) b=+base||15;
+ if(String(key).indexOf('gov:')===0&&DUR_FIX[dk]!==undefined&&(dk==='gov:appoint'||dk==='gov:mobilize')) b=DUR_FIX[dk];
+ return Math.max(1,Math.round(b*actFactor()*netSpeed(key)));
+}
+/* 按钮上的预计天数（data-cd 键） */
+function dayHint(key){
+ key=String(key||'');
+ if(key.indexOf('gov:')===0){
+  var k=key.slice(4), r=(window.__GOV_DAYS||{})[k];
+  if(!r) return '';
+  var a=dayCost(key,r[0]), b=dayCost(key,r[1]);
+  return a===b?('约 '+a+' 天'):('约 '+a+'–'+b+' 天');
+ }
+ var dk=durKey(key); if(!dk) return '';
+ return '约 '+dayCost(key,DUR_FIX[dk])+' 天';
+}
+window.__dayHint=dayHint; window.__dayCost=dayCost;
+
+/* ---------- 2. 取消冷却：只保留“持续工程”占用（兴办实业等） ---------- */
+var GATE_LABEL={};
+actBusy=function(key){
+ if(!s) return null;
+ calEnsure(s);
+ var j=jobOf(key);
+ if(j) return {kind:'job',days:Math.max(0,j.end-s.cal.ord),until:j.end,label:j.label};
+ return null;
+};
+actBusyText=function(b){
+ if(!b) return '';
+ return '进行中 · 预计 '+calFmtOrd(b.until)+' 完成（还需 '+b.days+' 天）';
+};
+actGate=function(key,label){
+ if(!s) return false;
+ calEnsure(s);
+ if(label) GATE_LABEL[key]=label;
+ if(s.dead){ calToast('人已不在，诸事皆休。'); return false; }
+ if(s.cal.finished){ calToast('历史已经走到 1972 年末，本局已经结算。'); return false; }
+ if(SP.cur){ calToast('正在办理「'+SP.cur.label+'」，'+calFmtOrd(SP.cur.to)+' 办完。'); return false; }
+ var b=actBusy(key);
+ if(b){ calToast((label?'「'+label+'」':'此事')+actBusyText(b)); return false; }
+ return true;
+};
+/* 旧接口 actCool(键, 天数)：现在表示“这件事要花 N 天”，登记后由时间推进器执行 */
+actCool=function(key,baseDays){
+ if(!s) return 0;
+ calEnsure(s);
+ var n=dayCost(key,baseDays);
+ if(SP.cur) return n;              /* 推进途中（如事件抉择）不再叠加新的耗时 */
+ var lab=GATE_LABEL[key]||DUR_LABEL[durKey(key)]||(key.indexOf('gov:')===0&&window.__govLabel?window.__govLabel(key.slice(4)):'')||'此事';
+ if(lab==='此事'&&key.indexOf('gov:')===0) lab=(window.__govLabel&&window.__govLabel(key.slice(4)))||lab;
+ if(!SP.req||n>SP.req.n) SP.req={n:n,key:key,label:lab};
+ if(!SP.pre) SP.pre=SP.lastPre||spSnap();
+ return n;
+};
+var _jobStartV4185=jobStart;
+jobStart=function(key,opt){
+ var j=_jobStartV4185.apply(this,arguments);
+ if(s&&s.cooldowns) delete s.cooldowns[key];   /* 工程本身不再附带冷却 */
+ return j;
+};
+
+/* ---------- 3. 时间推进器 + 结果提示 ---------- */
+var SP={pre:null,lastPre:null,req:null,cur:null,popup:null};
+function spSnap(){
+ if(!s) return null;
+ var rel={}, k; for(k in (s.rel||{})) rel[k]=s.rel[k];
+ var natl={}; for(k in (s.natl||{})) natl[k]=s.natl[k];
+ var E=s.econ||{};
+ var F=s.frac||{}; function ev(k){ return (+s[k]||0)+(+F[k]||0); }
+ return {ord:s.cal?s.cal.ord:0,cash:+s.cash||0,debt:+E.debt||0,loans:loanTotal(),skill:ev('skill'),fame:ev('fame'),power:ev('power'),trust:ev('trust'),
+  health:(s.health===undefined?100:+s.health),rank:+s.rank||0,title:rankTitleOf(),supRel:supRel(),clubRel:+s.clubRel||0,
+  troops:(s.unit&&+s.unit.troops)||0,mor:(s.unit&&+s.unit.mor)||0,fund:+s.fund||0,alt:+s.alt||0,rel:rel,natl:natl,
+  head:(s.logs||[])[0],res:(E.state&&E.state.res)||0,net:Object.keys(s.net||{}).length};
+}
+function spWorth(){ return (+s.cash||0)-((s.econ&&+s.econ.debt)||0)-loanTotal(); }
+function logsSince(head,max){
+ var out=[]; if(!s) return out;
+ for(var i=0;i<s.logs.length&&s.logs[i]!==head;i++) out.push(logText(s.logs[i]).replace(/^\d+年\d+月\d+日\s*/,''));
+ return out.reverse().slice(-(max||12));
+}
+function spMark(){ if(!SP.cur&&s) SP.lastPre=spSnap(); }
+/* 开始推进：处理完行动当时的效果后调用 */
+function spBegin(){
+ if(!SP.req||!s) return false;
+ var q=SP.req, pre=SP.pre||SP.lastPre||spSnap();
+ SP.req=null; SP.pre=null;
+ var post=spSnap();
+ var c={key:q.key,label:q.label,n:q.n,from:s.cal.ord,to:Math.min(CAL_END_ORD,s.cal.ord+q.n),pre:pre,post:post,inc:0,exp:0,months:[],evLogs:[],head:post.head,actLogs:logsSince(pre.head,8)};
+ var dw=(post.cash-post.debt-post.loans)-(pre.cash-pre.debt-pre.loans);
+ if(dw>0) c.inc+=dw; else c.exp+=-dw;
+ SP.cur=c;
+ /* 行动当时打开的普通弹窗（如派系面板）一并收起；历史抉择/年度报告不受影响 */
+ try{ var tg=($('dlgTag').textContent||''); if(!$('mask').classList.contains('hidden')&&!/历史抉择|年度报告|历史终章|人生终章/.test(tg)) $('mask').classList.add('hidden'); }catch(e){}
+ CLOCK.acc=0;
+ spRun();
+ return true;
+}
+/* 逐日推进；遇到弹窗就停在当天，弹窗处理完由时钟循环接着推进 */
+function spRun(){
+ var c=SP.cur; if(!c||!s) return;
+ var guard=0;
+ if(CLOCK.wasBlocked&&!calBlocked()){ calFlush(); }        /* 当天还有到期的事件/报告，先处理 */
+ CLOCK.wasBlocked=false;
+ while(s&&!s.dead&&!s.cal.finished&&s.cal.ord<c.to&&guard<4000){
+  if(calBlocked()){ CLOCK.wasBlocked=true; return; }
+  guard++;
+  var w0=spWorth();
+  var ok=calStepDay();
+  if(!ok) break;
+  var dw=spWorth()-w0-(c.mNet||0); c.mNet=0;      /* 月结的收支已按明细计入，这里只计其余变动 */
+  if(dw>0.004) c.inc+=dw; else if(dw<-0.004) c.exp+=-dw;
+  if(!calBlocked()) calFlush();
+ }
+ if(calBlocked()){ CLOCK.wasBlocked=true; return; }
+ spFinish();
+}
+function spFinish(){
+ var c=SP.cur; if(!c) return;
+ SP.cur=null;
+ c.end=s?s.cal.ord:c.to;
+ if(s) c.after=spSnap();
+ /* 对账：途中事件抉择等带来的银钱变动也计入，使“收入 − 支出”等于净资产实际变化 */
+ if(c.after){ var tw=(c.after.cash-c.after.debt-c.after.loans)-(c.pre.cash-c.pre.debt-c.pre.loans), resid=tw-(c.inc-c.exp);
+  if(resid>0.004) c.inc+=resid; else if(resid<-0.004) c.exp+=-resid; }
+ CLOCK.acc=0; CLOCK.last=Date.now(); CLOCK.needRender=true;
+ if(s&&!s.dead&&!(s.cal.finished&&calBlocked())) spPopup(c,false);
+ try{ persist(); }catch(e){}
+}
+function dSign(v,unit){ v=Math.round(v*10)/10; return (v>0?'+':'')+v+(unit||''); }
+function spDiffLines(a,b){
+ var L=[];
+ [['skill','能力'],['fame','声望'],['power','政治影响'],['trust','上级信任'],['health','健康'],['alt','历史影响']].forEach(function(k){
+  var d=Math.round((b[k[0]]-a[k[0]])*10)/10; if(Math.abs(d)>=0.1) L.push(k[1]+' '+dSign(Math.abs(d)>=1?Math.round(d):d)+(Math.abs(d)<1?'（积累中）':''));
+ });
+ if(b.title!==a.title) L.push('职位：'+a.title+' → '+b.title);
+ if(Math.abs(b.troops-a.troops)>=1) L.push('所部兵员 '+(b.troops>a.troops?'+':'')+Math.round(b.troops-a.troops)+'（现 '+fmtMen(b.troops)+'）');
+ if(Math.abs(b.mor-a.mor)>=1) L.push('士气 '+dSign(Math.round(b.mor-a.mor)));
+ if(Math.abs(b.fund-a.fund)>=0.05) L.push('公费 '+(b.fund>a.fund?'+':'-')+M(Math.abs(b.fund-a.fund)));
+ if(Math.abs(b.debt-a.debt)>=0.05) L.push('欠债 '+(b.debt>a.debt?'+':'-')+M(Math.abs(b.debt-a.debt))+'（现 '+M(b.debt)+'）');
+ if(Math.abs(b.loans-a.loans)>=0.05) L.push('借款 '+(b.loans>a.loans?'+':'-')+M(Math.abs(b.loans-a.loans))+'（未还 '+M(b.loans)+'）');
+ if(s&&s.isLeader&&Math.abs(b.res-a.res)>=1) L.push('国库存银 '+(b.res>a.res?'+':'-')+M(Math.abs(b.res-a.res)*1e4));
+ var rl=[];
+ if(b.supRel!==a.supRel){ var u=supOf(); rl.push({n:(u?u.t+u.n:'上级'),d:b.supRel-a.supRel}); }
+ Object.keys(b.rel).forEach(function(n){ var d=(b.rel[n]||0)-((a.rel[n]===undefined)?50:a.rel[n]); if(a.rel[n]===undefined&&b.rel[n]===50) return; if(Math.abs(d)>=1) rl.push({n:n,d:d}); });
+ if(b.clubRel!==a.clubRel&&s&&s.clubJoined) rl.push({n:(CLUBS[s.club]||{}).name||'结社',d:b.clubRel-a.clubRel});
+ rl.sort(function(x,y){return Math.abs(y.d)-Math.abs(x.d);});
+ rl.slice(0,5).forEach(function(r){ L.push('与'+r.n+'关系 '+dSign(Math.round(r.d))); });
+ if(rl.length>5) L.push('另有 '+(rl.length-5)+' 人关系变化');
+ var nd=[]; NAT_KEYS.forEach(function(k){ var d=(b.natl[k[0]]||0)-(a.natl[k[0]]||0); if(Math.abs(d)>=1) nd.push(k[1]+' '+dSign(Math.round(d))); });
+ if(nd.length) L.push('国势：'+nd.join('，'));
+ if(b.net>a.net) L.push('关系网新添 '+(b.net-a.net)+' 人');
+ return L;
+}
+function spPopup(c,instant){
+ if(!s) return;
+ var a=c.pre, b=c.after||spSnap();
+ var lines=spDiffLines(a,b);
+ var head='';
+ if(!instant){
+  head='耗时 '+(c.end-c.from)+' 天（'+calFmtOrd(c.from)+'—'+calFmtOrd(c.end).replace(/^\d+年/,function(m){ return calFromOrd(c.end).y===calFromOrd(c.from).y?'':m; })+'）';
+  if(c.end-c.from<c.n&&(s.cal.finished||s.dead)) head+='，历史已到终点，未走完预定的 '+c.n+' 天';
+ }else head='当即生效';
+ var money=[];
+ if(c.inc>=0.005) money.push('收入 '+M(c.inc));
+ if(c.exp>=0.005) money.push('支出 '+M(c.exp));
+ var h='<div class="rp"><p class="rp-head">'+head+(money.length?'，'+money.join('，'):'')+'</p>';
+ if(c.months&&c.months.length){
+  h+='<div class="rp-sec"><b>期间生计结算</b><ul>'+c.months.map(function(m){ return '<li>'+m+'</li>'; }).join('')+'</ul></div>';
+ }
+ h+=lines.length?('<div class="rp-sec"><b>变化</b><ul>'+lines.map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>'):'<p class="small muted">没有明显变化。</p>';
+ var acts=(c.actLogs||[]).filter(function(t){ return t&&!/^【历法】/.test(t); });
+ if(acts.length) h+='<div class="rp-sec"><b>经过</b><ul>'+acts.slice(-5).map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
+ if(!instant){
+  var mid=logsSince(c.head,40).filter(function(t){ return /【[^】]+】/.test(t)&&!/【生计】/.test(t); });
+  if(mid.length) h+='<div class="rp-sec"><b>这些天里</b><ul>'+mid.slice(-6).map(function(t){return '<li>'+t+'</li>';}).join('')+'</ul></div>';
+ }
+ h+='</div><button class="choice" id="rpOk" style="text-align:center"><b>知道了</b></button>';
+ SP.popup={tag:(instant?'结果':'办完了')+' · '+calFmtOrd(s.cal.ord),title:c.label,html:h};
+ spShowPopup();
+}
+function spShowPopup(){
+ if(!SP.popup||calBlocked()) return false;
+ var p=SP.popup; SP.popup=null;
+ $('dlgTag').textContent=p.tag; $('dlgTitle').textContent=p.title; $('dlgDesc').textContent='';
+ $('dlgBody').innerHTML=p.html;
+ $('mask').classList.remove('hidden');
+ var ok=document.getElementById('rpOk'); if(ok) ok.onclick=function(){ $('mask').classList.add('hidden'); };
+ try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
+ return true;
+}
+/* 没有耗时的抉择（历史事件、晋升等）也给出结果：点击前后比对 */
+function spInstant(label){
+ if(!s||!SP.lastPre||SP.cur||SP.req) return false;
+ var a=SP.lastPre, b=spSnap();
+ SP.lastPre=null;
+ var lines=spDiffLines(a,b);
+ var dw=(b.cash-b.debt-b.loans)-(a.cash-a.debt-a.loans);
+ if(!lines.length&&Math.abs(dw)<0.005) return false;
+ var c={label:label||'结果',pre:a,after:b,inc:dw>0?dw:0,exp:dw<0?-dw:0,actLogs:logsSince(a.head,6)};
+ spPopup(c,true);
+ return true;
+}
+/* 推进中的事件抉择不单独弹出，记入本次行动的“这些天里” */
+function spTick(){
+ if(SP.req&&!SP.cur) spBegin();
+ if(SP.cur){ if(!calBlocked()) spRun(); return true; }
+ if(SP.popup) spShowPopup();
+ return false;
+}
+/* 点击：捕获阶段记下点击前的状态；冒泡阶段若登记了耗时就开始推进，否则若状态有变就弹出结果 */
+function spClickCapture(e){
+ if(!s||SP.cur) return;
+ var t=e.target&&e.target.closest?e.target.closest('button,[data-n],[data-act]'):null;
+ if(!t) return;
+ if(t.closest('#hudClock')||t.closest('#tabs')) return;
+ SP.lastPre=spSnap();
+ SP.lastLabel=(t.querySelector&&t.querySelector('b')?t.querySelector('b').textContent:t.textContent||'').replace(/\s+/g,' ').trim().slice(0,24);
+ SP.lastTag=($('dlgTag')&&$('dlgTag').textContent)||'';
+}
+function spClickBubble(e){
+ if(!s) return;
+ if(SP.req&&!SP.cur){ spBegin(); return; }
+ if(SP.cur) return;
+ if(SP.lastPre){
+  var tag=SP.lastTag||'';
+  var lab=/历史抉择/.test(tag)?('抉择：'+(SP.lastLabel||'')):(SP.lastLabel||'结果');
+  if(!$('mask').classList.contains('hidden')&&!/rpOk/.test(String(e.target&&e.target.id))){ SP.lastPre=null; return; }  /* 打开了新的选择框：等真正选定后再比对 */
+  spInstant(lab);
+ }
+}
+window.addEventListener('click',spClickCapture,true);
+window.addEventListener('click',spClickBubble,false);
+var _calLoopV4185=calLoop;
+calLoop=function(){
+ if(s&&spTick()){ if(CLOCK.needRender){ CLOCK.needRender=false; try{ if(window.__RENDER) window.__RENDER(); else render(); }catch(e){} } calClockUI(false); return; }
+ _calLoopV4185();
+};
+
+/* ---------- 4. 生计：每月结算 ---------- */
+var ORIGIN_ALLOW={'普通家庭':0.3,'乡绅家庭':3,'商人家庭':2.5,'军人家庭':0.8,'知识分子家庭':1.5,'皇室家庭':30};
+function econItems(x){
+ var pay=livePayItems(x).map(function(p){return [p[0],+p[1]||0];});
+ var cost=liveCostItems(x).map(function(p){return [p[0],+p[1]||0];});
+ var age=(x.year||1840)-(x.birth||1820);
+ if((x.role==='student'||x.role==='activist')&&(x.rank||0)<=1&&age<28&&ORIGIN_ALLOW[x.origin]) pay.push(['家中接济',ORIGIN_ALLOW[x.origin]]);
+ /* 底层人家：妻子纺织、做零活补贴家用（清末民初普通家庭的常态） */
+ if(!x.isLeader&&!x.isThrone&&liveHousehold(x)>=2){
+  if((x.year||1840)>=1950&&(x.rank||0)<=5) pay.push(['配偶工资',3.5]);            /* 1950 年代起城镇多为双职工 */
+  else if((x.rank||0)<=2) pay.push(['家人帮补（纺织、零活）',0.6]);
+ }
+ var E=econEnsure(x);
+ (E.loans||[]).forEach(function(l){ cost.push(['借款利息（'+l.from+'）',(+l.amt||0)*(+l.rate||0)]); });
+ if(E.debt>0) cost.push(['欠债利息',E.debt*0.03]);
+ return {pay:pay,cost:cost};
+}
+function econMonth(now){
+ if(!s||s.dead) return;
+ var E=econEnsure(s), it=econItems(s);
+ var prev=calFromOrd(s.cal.ord-1);
+ var pay=it.pay.map(function(p){
+  if(p[0]==='铺面进项'){ var r=Math.random(); var v=r<0.1?-p[1]*rnd(0.2,0.8):p[1]*rnd(0.4,1.6); return [v<0?'铺面亏折':p[0],v]; }
+  return p;
+ });
+ var inc=0, exp=0;
+ pay.forEach(function(p){ if(p[1]>=0) inc+=p[1]; else exp+=-p[1]; });
+ it.cost.forEach(function(c){ exp+=c[1]; });
+ inc=_r2(inc); exp=_r2(exp);
+ s.cash=_r2((+s.cash||0)+inc-exp);
+ /* 公费：职位可支配的公款，不是个人收入 */
+ var line=LIVE_LINE[s.role];
+ if((line==='mil'||line==='civ'||s.isLeader)&&!s.pendingFaction) s.fund=_r2((+s.fund||0)+FUND_MONTH[Math.max(0,Math.min(7,s.rank||0))]);
+ var note='';
+ if(s.cash<0){ E.debt=_r2(E.debt-s.cash); s.cash=0; E.brokeMonths++; note='入不敷出，欠债增至 '+M(E.debt); }
+ else if(E.debt>0){
+  var keep=exp; var payoff=Math.min(E.debt,Math.max(0,s.cash-keep));
+  if(payoff>0){ E.debt=_r2(E.debt-payoff); s.cash=_r2(s.cash-payoff); note='还了欠债 '+M(payoff)+(E.debt>0?'，尚欠 '+M(E.debt):'，债已还清'); }
+  if(E.debt<=0) E.brokeMonths=0;
+ }else E.brokeMonths=0;
+ /* 借款到期 */
+ E.loans.forEach(function(l){
+  if(s.cal.ord>=l.due&&!l.late){ l.late=true; netRelAdd(l.from,-12,'借款到期未还'); }
+  if(l.late&&s.cal.ord>=l.due+90&&!l.defaulted){
+   l.defaulted=true; netRelAdd(l.from,-25,'你借钱逾期三个月不还'); netGrudge(l.from); s.fame=clamp((s.fame||0)-2);
+   Object.keys(s.net||{}).forEach(function(n){ var p=s.net[n]; if(n!==l.from&&p.can&&p.can.indexOf('loan')>=0) relSetN(n,relGetN(n)-3); });
+   log('【生计】欠'+l.from+'的钱逾期三月未还，'+l.from+'四处说你不讲信用。');
+  }
+ });
+ /* 逾期一年仍不还：债主告官，借款转为欠债（按 3 分月息计） */
+ E.loans=E.loans.filter(function(l){
+  if(l.defaulted&&s.cal.ord>=l.due+365){ E.debt=_r2(E.debt+l.amt); netRemember(l.from,'把你告到官里，借款转为欠债'); log('【生计】'+l.from+'告到官里，'+M(l.amt)+'的借款转为欠债。'); return false; }
+  return true;
+ });
+ /* 欠债的后果：月开销 3 倍以上伤身伤名，12 倍以上债主上门 */
+ if(E.debt>0){
+  var shield=netShield();
+  if(E.debt>exp*3&&!shield&&now&&now.m%2===0) s.fame=clamp((s.fame||0)-1);
+  if(E.debt>exp*6&&!shield) s.health=clamp((s.health||100)-1);
+  if(E.debt>Math.max(30,exp*24)){
+   /* 债台高筑：债主告官，变卖家产抵债，七成债务就此了结，名声与身体都受重创 */
+   var sh2=netShield();
+   var cut=_r2(E.debt*(sh2?0.8:0.7)); E.debt=_r2(E.debt-cut); s.cash=0;
+   s.fame=clamp((s.fame||0)-6); s.trust=clamp((s.trust||0)-4); s.health=clamp((s.health||100)-4); s.supRel=clamp(supRel()-5);
+   E.bankrupt=(E.bankrupt||0)+1;
+   log('【破产】债主告到官里，变卖家产抵去 '+M(cut)+' 的债'+(sh2?'（'+sh2+'从中说合，少吃了些亏）':'')+'，尚欠 '+M(E.debt)+'。');
+   if(sh2) netRemember(sh2,'在你破产时从中说合');
+  }else if(E.debt>exp*12&&Math.random()<0.5){
+   if(shield){ log('【生计】债主上门，'+shield+'出面担保，暂且宽限。'); netRemember(shield,'替你挡了债主'); }
+   else{ s.trust=clamp((s.trust||0)-2); s.supRel=clamp(supRel()-2); log('【生计】债主堵在门口，欠债 '+M(E.debt)+'，脸面丢尽。'); }
+  }
+ }
+ /* 国库：按财政指数盈亏（万两） */
+ var sr=stateRev(); E.state.res=Math.round((E.state.res+sr/12*(((s.natl&&s.natl.财政)||40)-48)/150)*10)/10;
+ var rec={y:prev.y,m:prev.m,inc:inc,exp:exp,cash:s.cash,debt:E.debt,pay:pay.map(function(p){return [p[0],_r2(p[1])];}),cost:it.cost.map(function(c){return [c[0],_r2(c[1])];})};
+ E.last=rec; E.hist.push({y:prev.y,m:prev.m,inc:inc,exp:exp}); if(E.hist.length>24) E.hist=E.hist.slice(-24);
+ if(window.__econHook) try{ window.__econHook(prev.y,prev.m); }catch(e){}
+ if(SP.cur){ SP.cur.inc+=inc; SP.cur.exp+=exp; SP.cur.mNet=(SP.cur.mNet||0)+(inc-exp); }
+ if(SP.cur) SP.cur.months.push(prev.y+'年'+prev.m+'月：收入 '+M(inc)+'，开销 '+M(exp)+(note?'；'+note:''));
+ if(note&&!SP.cur) log('【生计】'+prev.m+'月结算：收入 '+M(inc)+'，开销 '+M(exp)+'；'+note+'。');
+ /* 关系：久不往来会淡 */
+ netDecay(now);
+}
+var _calMonthTickV4185=calMonthTick;
+calMonthTick=function(now){
+ try{ econMonth(now); }catch(e){ if(window.console) console.error(e); }
+ return _calMonthTickV4185.apply(this,arguments);
+};
+window.__econMonth=econMonth; window.__econItems=econItems;
+
+/* ---------- 5. 关系网 ---------- */
+var NET_CAN={promote:'保举',protect:'庇护',info:'消息',intro:'引荐',loan:'借贷',deal:'生意',skill:'指点',heal:'延医'};
+var NET_TYPES={
+ tongxiang:{can:['info','intro'],lv:[0,2],t:function(y){return ['同乡','族中长辈','老街坊'];}},
+ scholar:{can:['info','skill','intro'],lv:[1,3],t:function(y){return y<1905?['塾师','书院生员','举人']:(y<1949?['学堂教员','报馆编辑','大学教授']:['中学教师','编辑','研究员']);}},
+ merchant:{can:['loan','deal'],lv:[1,4],t:function(y){return y<1912?['票号掌柜','钱庄东家','行栈老板']:(y<1949?['钱庄经理','银行襄理','洋行买办']:['供销社主任','商店经理','工厂厂长']);}},
+ gentry:{can:['protect','intro','loan'],lv:[2,4],t:function(y){return y<1912?['乡绅','族长','团练首事']:(y<1949?['乡绅','县参议员','商会董事']:['公社书记','大队长','老干部']);}},
+ official:{can:['info','protect'],lv:[1,4],t:function(y){return y<1912?['县衙书吏','刑名师爷','巡检']:(y<1949?['科员','警察分局长','县府秘书']:['科长','公安干部','办公室主任']);}},
+ military:{can:['protect','info'],lv:[1,4],t:function(y){return y<1912?['把总','营官','哨官']:(y<1949?['连长','营长','团副']:['连长','武装部长','团政委']);}},
+ comrade:{can:['info','protect','intro'],lv:[0,3],t:function(y){return y<1912?['会党兄弟','同志','联络人']:['同志','交通员','老战友'];}},
+ doctor:{can:['heal'],lv:[1,3],t:function(y){return y<1912?['郎中','药铺掌柜']:['医生','西医'];}}
+};
+var NET_XING='王李张刘陈杨黄赵周吴徐孙胡朱高林何郭马罗梁宋郑谢韩唐冯于董萧程曹袁邓许傅沈曾彭吕苏卢蒋蔡贾丁魏薛叶阎余潘杜戴夏钟汪田任姜范方石姚谭廖邹熊金陆郝孔白崔康毛邱秦江史顾侯邵孟龙万段雷钱汤尹黎易常武乔贺赖龚文'.split('');
+var NET_MING=['子敬','伯谦','仲甫','季常','少卿','云亭','鹤年','汉臣','守之','慎斋','秉文','立夫','志远','绍棠','兰生','启明','德馨','荣甫','禹门','树人','健侯','耀庭','维新','怀瑾','雨农','觉民','砚秋','敬亭','梦麟','少川','佩之','翰卿','振声','济川','慕韩','月樵'];
+function netEnsure(x){ x=x||s; if(!x.net||typeof x.net!=='object'||Array.isArray(x.net)) x.net={}; return x.net; }
+function supName(){ var u=supOf&&supOf(); return u?u.n:''; }
+function relGetN(n){ if(n===supName()) return supRel(); return getRel(n); }
+function relSetN(n,v){ if(n===supName()){ s.supRel=clamp(v); return; } s.rel[n]=clamp(v); }
+function netP(n,init){
+ var N=netEnsure(s);
+ if(!N[n]){ N[n]=init||{t:'',lv:0,can:[],kind:'contact',mem:[],last:s.cal.ord,since:s.cal.ord,owe:0,grudge:0}; }
+ var p=N[n]; if(!Array.isArray(p.mem)) p.mem=[]; if(!Array.isArray(p.can)) p.can=[]; if(typeof p.last!=='number') p.last=s.cal.ord;
+ return p;
+}
+function netRemember(n,t){ if(!n||!s) return; var p=netP(n); p.mem.unshift({o:s.cal.ord,t:t}); if(p.mem.length>16) p.mem.length=16; p.last=s.cal.ord; }
+function netGrudge(n){ var p=netP(n); p.grudge=(p.grudge||0)+1; }
+function netRelAdd(n,d,why){ relSetN(n,relGetN(n)+d); if(why) netRemember(n,why+'（关系 '+dSign(d)+'）'); }
+function histOf(n){ var all=[]; Object.keys(PEOPLE).forEach(function(f){ (PEOPLE[f]||[]).forEach(function(p){ if(p.n===n) all.push(p); }); }); return all[0]||null; }
+/* 关系网成员：直属上级 + 有往来的人（结交、引荐、互动过的历史人物、同棚弟兄） */
+function netNames(){
+ var N=netEnsure(s), out=[], sn=supName();
+ if(sn) out.push(sn);
+ Object.keys(N).forEach(function(n){ if(n!==sn&&!N[n].gone) out.push(n); });
+ return out;
+}
+function netInfoOf(n){
+ var sn=supName();
+ if(n===sn){ var u=supOf(); var p=netP(n); p.kind='sup'; p.t=u.t; p.lv=Math.min(7,(s.rank||0)+1); p.can=['promote','protect','info','intro']; return p; }
+ var q=netP(n);
+ if(q.kind==='hist'&&!q.t){ var h=histOf(n); q.t=(h&&h.cl)||'历史人物'; q.lv=(h&&h.rank!==undefined)?Math.max(2,h.rank+2):4; q.can=['promote','intro','protect']; }
+ return q;
+}
+function stanceOf(r){ return r>=85?'至交':r>=70?'亲近':r>=55?'友善':r>=40?'平常':r>=25?'冷淡':'敌视'; }
+function netAllies(min){ if(!s) return 0; var c=0; netNames().forEach(function(n){ if(relGetN(n)>=(min||70)) c++; }); return c; }
+function netHas(cap,min){ if(!s) return null; var names=netNames(); for(var i=0;i<names.length;i++){ var p=netInfoOf(names[i]); if(p.can.indexOf(cap)>=0&&relGetN(names[i])>=(min||60)) return names[i]; } return null; }
+window.__netHas=netHas;
+/* 晋升：比你位高、关系≥70 的人肯替你说话，每人抵 1.5 分（有“保举”能力再 +1），合计最多 6 分；请托保举另加 3 分（一年内有效） */
+function netPatronBonus(){
+ if(!s) return 0;
+ var b=0;
+ netNames().forEach(function(n){ var p=netInfoOf(n); if(p.lv>(s.rank||0)&&relGetN(n)>=70){ b+=1.5+(p.can.indexOf('promote')>=0?1:0); } });
+ b=Math.min(6,b);
+ var E=econEnsure(s); if(E.patron&&E.patron.until>=s.cal.ord) b+=3;
+ return Math.round(b*10)/10;
+}
+window.__netPatron=netPatronBonus;
+/* 庇护：请托得到的庇护（一年），或关系≥80 且有“庇护”能力的人 */
+function netShield(){
+ if(!s) return null;
+ var E=econEnsure(s); if(E.shield&&E.shield.until>=s.cal.ord) return E.shield.n;
+ var names=netNames(); for(var i=0;i<names.length;i++){ var p=netInfoOf(names[i]); if(p.can.indexOf('protect')>=0&&relGetN(names[i])>=80) return names[i]; }
+ return null;
+}
+/* 风险行动：被抓的几率，庇护者可以把人捞出来 */
+window.__netRisk=function(p,why){
+ if(Math.random()>=p) return '';
+ var sh=netShield();
+ if(sh){ netRemember(sh,'把你从巡警手里保了出来'); relSetN(sh,relGetN(sh)-3); return '（'+why+'，'+sh+'出面作保，没出大事。）'; }
+ s.health=clamp((s.health||100)-6); s.trust=clamp((s.trust||0)-5); s.cash=Math.max(0,(s.cash||0)-0.5);
+ econEnsure(s).hit={o:s.cal.ord,trust:5};
+ return '（'+why+'，被拘了几天，罚银 '+M(0.5)+'，挨了打。）';
+};
+function netUnique(){ for(var g=0;g<60;g++){ var n=pick(NET_XING)+pick(NET_MING); if(!s.net[n]&&s.rel[n]===undefined&&n!==supName()) return n; } return pick(NET_XING)+pick(NET_MING)+'甫'; }
+/* 新结识一人；返回“身份 姓名” */
+function netNew(type,lvBoost,via){
+ if(!s) return null;
+ var T=NET_TYPES[type]||NET_TYPES.tongxiang;
+ var n=netUnique(), lv=Math.round(rnd(T.lv[0],T.lv[1]))+(lvBoost||0);
+ lv=Math.max(0,Math.min(7,lv));
+ var titles=T.t(s.year||1840);
+ var p=netP(n,{t:pick(titles),lv:lv,can:T.can.slice(),kind:'contact',type:type,mem:[],last:s.cal.ord,since:s.cal.ord,owe:0,grudge:0});
+ s.rel[n]=Math.round(rnd(48,58));
+ netRemember(n,via?('经'+via+'引荐相识'):'初次相识');
+ return p.t+n;
+}
+window.__netNew=netNew;
+/* 结伴：给关系网里随机一人加关系 */
+window.__netTouch=function(d){ var ns=netNames().filter(function(n){return n!==supName();}); if(!ns.length) return ''; var n=pick(ns); netRelAdd(n,d||3,'结伴同练'); return n; };
+/* 打听：有“消息”门路（关系≥60）或身居高位才能打听到下一件大事的日子 */
+function nextEventInfo(){
+ if(!s) return null;
+ var best=null, today=s.cal.ord;
+ for(var i=0;i<EVENTS.length;i++){
+  var ev=EVENTS[i]; if(s.evDone[ev.id]) continue;
+  var d=evDateOf(ev), o=calOrd(ev.y,d[0],d[1]);
+  if(o>=today&&o-today<=400&&(!best||o<best.o)) best={o:o,t:ev.t};
+ }
+ return best;
+}
+window.__netInfo=function(){
+ var src=netHas('info',60), hi=(s.rank||0)>=4||s.isLeader;
+ var nx=nextEventInfo();
+ if(!src&&!hi){ return s.__rebel?'听说'+s.__rebel.place+'一带不太平。':''; }
+ var who=src?('从'+src+'那里得知：'):'从邸报与公文里看出：';
+ if(src) netRemember(src,'给你透了消息');
+ if(nx) return who+'约在'+calFmtOrd(nx.o).replace(/\d+日$/,'')+'前后恐有大事（'+nx.t+'），宜早作准备。';
+ return who+(s.__rebel?(s.__rebel.place+'的'+s.__rebel.n+'约有 '+fmtMen(s.__rebel.arm)+'，官军正在调动。'):'眼下上面没有大动作。');
+};
+/* 久不往来就淡：两个月没联系，关系每月向 50 回落 1（至交隔月回落）；仇怨每三个月消 1 */
+function netDecay(now){
+ if(!s) return;
+ var today=s.cal.ord;
+ /* 生老病死：结识二十五年以上的旧识，每月约千分之八的机会故去 */
+ Object.keys(s.net||{}).forEach(function(n){
+  var p=s.net[n]; if(p.gone||p.kind!=='contact') return;
+  if(today-(p.since||today)>25*365&&Math.random()<0.008){ p.gone=true; netRemember(n,'故去'); log('【人事】旧识'+n+'（'+(p.t||'')+'）故去了。'); }
+ });
+ netNames().forEach(function(n){
+  var p=netInfoOf(n), r=relGetN(n), idle=today-(p.last||today);
+  if(idle<60) return;
+  if(r>55){ if(r>=85&&now&&now.m%2) return; relSetN(n,r-1); }
+  else if(r<45&&now&&now.m%3===0){ relSetN(n,r+1); }
+ });
+}
+/* 人记得你：送礼/拜访的效果受过往恩怨影响 */
+function netMemF(n){ var p=netInfoOf(n); return Math.max(0.3,1+0.1*Math.min(3,p.owedYou||0)-0.4*Math.min(1,p.grudge||0)); }
+function netTrouble(){
+ var E=econEnsure(s), t=[];
+ E.loans.forEach(function(l){ if(l.late) t.push({k:'loan',l:l}); });
+ if(E.debt>0) t.push({k:'debt'});
+ if(E.hit&&s.cal.ord-E.hit.o<=120) t.push({k:'hit'});
+ return t;
+}
+/* 关系网行动：返回 null 表示可做，否则返回原因 */
+function netWhy(n,act){
+ var p=netInfoOf(n), r=relGetN(n);
+ if(SP.cur) return '正在办别的事';
+ if(act==='visit'||act==='gift') return null;
+ if(act==='favor'){ if(r<60) return '请托需关系≥60（现 '+r+'）'; var f=p.can.filter(function(c){return c!=='loan'&&c!=='intro'&&(c!=='promote'||p.lv>(s.rank||0));}); if(!f.length) return '此人帮不上这类忙'; return null; }
+ if(act==='intro'){ if(p.can.indexOf('intro')<0) return '此人没有引荐的门路'; if(r<65) return '引荐需关系≥65（现 '+r+'）'; return null; }
+ if(act==='loan'){ if(p.can.indexOf('loan')<0) return '此人不放债'; if((p.grudge||0)>0) return '你欠债不还的事他记着'; if(r<55) return '借贷需关系≥55（现 '+r+'）'; if(econEnsure(s).loans.some(function(l){return l.from===n;})) return '前一笔借款未还清'; return null; }
+ if(act==='plead'){ if(p.can.indexOf('protect')<0) return '此人说不上话'; if(r<70) return '求情需关系≥70（现 '+r+'）'; if(!netTrouble().length) return '眼下没有需要求情的事'; return null; }
+ return null;
+}
+function netLoanAmt(n){ var p=netInfoOf(n); return _r2([5,15,50,150,500,1500,5000,20000][Math.max(0,Math.min(7,p.lv))]*relGetN(n)/100); }
+function netAct(n,act,sub){
+ if(!s||!n) return;
+ var why=netWhy(n,act); if(why){ flash(why); return; }
+ var key='net:'+act+':'+n, p=netInfoOf(n);
+ if(!actGate(key,(DUR_LABEL['net:'+act]||'')+n)) return;
+ var r=relGetN(n), d, txt='';
+ if(act==='visit'){
+  var c=_r2(0.1*(p.lv+1)); s.cash=Math.max(0,(s.cash||0)-c);
+  d=Math.round(rnd(3,7)*netMemF(n)); relSetN(n,r+d); netRemember(n,'登门叙谈（关系 '+dSign(d)+'）');
+  if(p.kind==='sup') addExp('trust',4);
+  txt='去'+n+'处坐了半日，带了些茶点（'+M(c)+'）。';
+ }else if(act==='gift'){
+  var g=giftCost(p.lv); if((s.cash||0)<g){ flash('礼金不够：给'+p.t+'备礼约需 '+M(g)); return; }
+  s.cash-=g; d=Math.round(rnd(6,12)*netMemF(n)); relSetN(n,r+d); netRemember(n,'收下你送的礼（'+M(g)+'，关系 '+dSign(d)+'）');
+  p.owedYou=(p.owedYou||0)+(g>=giftCost(p.lv)?0.5:0);
+  txt='送去 '+M(g)+' 的礼，'+n+'收下了。';
+ }else if(act==='favor'){
+  var cap=sub;
+  if(cap==='promote'){ econEnsure(s).patron={n:n,until:s.cal.ord+365}; addExp('trust',4); txt=n+'答应在上头替你说话（一年内晋升门槛 −3）。'; }
+  else if(cap==='info'){ txt=window.__netInfo()||(n+'说眼下没什么风声。'); }
+  else if(cap==='deal'){ var gain=_r2(rnd(0.5,2)*((s.rank||0)+1)*(1+p.lv/4)); s.cash=(s.cash||0)+gain; addExp('skill',2); txt=n+'介绍了一笔生意，你从中得 '+M(gain)+'。'; }
+  else if(cap==='protect'){ econEnsure(s).shield={n:n,until:s.cal.ord+365}; txt=n+'答应遇事替你出头（一年内有效）。'; }
+  else if(cap==='skill'){ addExp('skill',10); txt=n+'指点了你半月，受益匪浅。'; }
+  else if(cap==='heal'){ var hc=_r2(0.3*(p.lv+1)); s.cash=Math.max(0,(s.cash||0)-hc); s.health=clamp((s.health||100)+10); txt=n+'替你看了病，药钱 '+M(hc)+'。'; }
+  else return;
+  var cost=r>=85?0:4; relSetN(n,r-cost); p.owe=(p.owe||0)+1; netRemember(n,'替你'+(NET_CAN[cap]||'办事')+'，你欠下一份人情'+(cost?'（关系 -'+cost+'）':''));
+ }else if(act==='intro'){
+  var types=p.type?[p.type]:['scholar','official','gentry']; if(p.kind==='sup') types=['official','military','gentry'];
+  var nn=netNew(pick(types),1,n); relSetN(n,r-3); netRemember(n,'为你引荐了'+nn+'（关系 -3）');
+  var hp=visiblePeople().filter(function(h){ return !s.net[h.n]&&getRel(h.n)<=55; });
+  if(p.lv>=4&&hp.length&&Math.random()<0.5){ var h=pick(hp); s.rel[h.n]=Math.max(getRel(h.n),58); netP(h.n).kind='hist'; netRemember(h.n,'经'+n+'引荐得见'); txt='经'+n+'引荐，你见到了'+h.n+'，也结识了'+nn+'。'; }
+  else txt='经'+n+'引荐，结识了'+nn+'。';
+ }else if(act==='loan'){
+  var amt=netLoanAmt(n), rate=r>=75?0.01:0.02;
+  var E=econEnsure(s); E.loans.push({from:n,amt:amt,rate:rate,since:s.cal.ord,due:s.cal.ord+365});
+  s.cash=(s.cash||0)+amt; netRemember(n,'借给你 '+M(amt)+'，月息 '+Math.round(rate*100)+' 分，一年为期');
+  txt='向'+n+'借得 '+M(amt)+'，月息 '+Math.round(rate*100)+' 分，'+calFmtOrd(s.cal.ord+365)+'到期。';
+ }else if(act==='plead'){
+  var tr=netTrouble()[0], E2=econEnsure(s);
+  if(tr.k==='loan'){ tr.l.due=s.cal.ord+180; tr.l.late=false; if(tr.l.from!==n){ relSetN(tr.l.from,relGetN(tr.l.from)+5); netRemember(tr.l.from,n+'替你担保，宽限半年'); } txt=n+'出面担保，'+tr.l.from+'的借款宽限半年。'; }
+  else if(tr.k==='debt'){ var cover=_r2(Math.min(E2.debt,netLoanAmt(n)*0.6+5)); E2.debt=_r2(E2.debt-cover); E2.loans.push({from:n,amt:cover,rate:0,since:s.cal.ord,due:s.cal.ord+730}); txt=n+'替你垫还了 '+M(cover)+' 的债，不要利息，两年内还。'; }
+  else { var back=Math.ceil((E2.hit.trust||4)/2); s.trust=clamp((s.trust||0)+back); E2.hit=null; txt=n+'替你在上头求了情，挽回些信任。'; }
+  relSetN(n,r-6); p.owe=(p.owe||0)+1; netRemember(n,'替你求情（关系 -6）');
+ }
+ actCool(key,DUR_FIX['net:'+act]);
+ log('【人情】'+txt);
+ persist(); render();
+}
+function netRepay(i){
+ var E=econEnsure(s), l=E.loans[i]; if(!l) return;
+ if(!actGate('net:repay:'+l.from,'还钱给'+l.from)) return;
+ if((s.cash||0)<l.amt){ flash('现银不够：还清需 '+M(l.amt)+'，手上 '+M(s.cash||0)); return; }
+ s.cash=_r2(s.cash-l.amt); E.loans.splice(i,1);
+ var d=l.late?2:5; relSetN(l.from,relGetN(l.from)+d);
+ var p=netP(l.from); p.owedYou=(p.owedYou||0)+0.5;
+ netRemember(l.from,(l.late?'你迟了些，总算把钱还上':'你按期还清借款')+'（关系 +'+d+'）');
+ actCool('net:repay:'+l.from,2);
+ log('【人情】还清'+l.from+'的借款 '+M(l.amt)+'。');
+ persist(); render();
+}
+window.__netAct=netAct; window.__netRepay=netRepay; window.__netWhy=netWhy;
+/* 互动造成的关系变化自动记入此人的“往来记录” */
+function netDiffMemory(a,b,label){
+ if(!a||!b||!s) return;
+ Object.keys(b.rel).forEach(function(n){
+  var was=(a.rel[n]===undefined)?50:a.rel[n], d=b.rel[n]-was;
+  if(Math.abs(d)<1) return;
+  var p=s.net&&s.net[n];
+  if(!p){ if(!histOf(n)) return; p=netP(n); p.kind='hist'; }
+  if(p.mem[0]&&p.mem[0].o===s.cal.ord&&/关系/.test(p.mem[0].t)) return;   /* 本次已有具体记录 */
+  netRemember(n,(label||'往来')+'（关系 '+dSign(Math.round(d))+'）');
+ });
+ if(b.supRel!==a.supRel){ var sn=supName(); var sp=s.net&&s.net[sn]; if(!(sp&&sp.mem[0]&&sp.mem[0].o===s.cal.ord)) netRemember(sn,(label||'往来')+'（关系 '+dSign(b.supRel-a.supRel)+'）'); }
+}
+var _spPopupV4185=spPopup;
+spPopup=function(c,instant){ try{ netDiffMemory(c.pre,c.after||spSnap(),c.label); }catch(e){} return _spPopupV4185(c,instant); };
+
+/* 关系网卡片 */
+function netCardHTML(){
+ var names=netNames();
+ var rows=names.map(function(n){ return {n:n,p:netInfoOf(n),r:relGetN(n)}; }).sort(function(a,b){ return (b.p.kind==='sup')-(a.p.kind==='sup')||b.r-a.r; });
+ var allies=rows.filter(function(x){return x.r>=70;}).length, foes=rows.filter(function(x){return x.r<30;}).length;
+ var pb=netPatronBonus(), sh=netShield();
+ var h='<p class="small muted" style="margin:0 0 6px">共 '+rows.length+' 人 · 亲近 '+allies+' · 敌视 '+foes+
+  ' · 晋升保举 +'+pb+' · 跑关系省时 '+Math.round((1-netSpeed('net:visit'))*100)+'%'+(sh?' · 有人庇护：'+sh:'')+'</p>';
+ if(!rows.length) return h+'<p class="small muted">还没有往来的人。去「结交」认识人，或拜访历史人物。</p>';
+ var total=rows.length;
+ if(!NET_UI.all&&rows.length>10) rows=rows.slice(0,10);
+ rows.forEach(function(x){
+  var p=x.p, today=s.cal.ord, idle=today-(p.last||today);
+  var cans=p.can.map(function(c){return '<span class="net-can">'+NET_CAN[c]+'</span>';}).join('');
+  var btns='', whys=[];
+  [['visit','拜访'],['gift','送礼'],['favor','请托'],['intro','引荐'],['loan','借贷'],['plead','求情']].forEach(function(a){
+   if((a[0]==='loan'&&p.can.indexOf('loan')<0)||(a[0]==='intro'&&p.can.indexOf('intro')<0)||(a[0]==='plead'&&p.can.indexOf('protect')<0)) return;
+   var w=netWhy(x.n,a[0]);
+   var extra=a[0]==='gift'?'（'+M(giftCost(p.lv))+'）':(a[0]==='loan'&&!w?'（'+M(netLoanAmt(x.n))+'）':'');
+   btns+='<button class="btn sm" data-net="'+a[0]+'" data-nn="'+x.n+'" data-cd="net:'+a[0]+':'+x.n+'"'+(w?' disabled title="'+w+'"':'')+'>'+a[1]+extra+'</button>';
+   if(w&&a[0]!=='visit'&&a[0]!=='gift') whys.push(a[1]+'：'+w);
+  });
+  h+='<div class="net-row"><div class="net-top"><b class="net-name" data-np="'+x.n+'">'+x.n+'</b><span class="small muted">'+(p.t||'')+'</span>'+
+   '<span class="net-st s'+(x.r>=70?'hi':x.r<40?'lo':'mid')+'">'+stanceOf(x.r)+' '+x.r+'</span></div>'+
+   '<div class="bar"><i style="width:'+x.r+'%"></i></div>'+
+   '<div class="small muted">能帮你：'+(cans||'—')+' · 上次往来 '+(idle<=0?'今天':idle+' 天前')+(p.grudge?' · <span style="color:var(--red)">记着你的旧账</span>':'')+'</div>'+
+   '<div class="pbtns">'+btns+'<button class="btn sm" data-np="'+x.n+'">往来记录</button></div>'+
+   (whys.length?'<div class="net-why">'+whys.join('；')+'</div>':'')+'</div>';
+ });
+ if(total>10) h+='<button class="btn sm" data-netall="1" style="margin-top:6px">'+(NET_UI.all?'只看前 10 人':'显示全部 '+total+' 人')+'</button>';
+ return h;
+}
+var NET_UI={all:false};
+function netRender(){
+ if(!s) return;
+ var old=document.getElementById('v42net'); if(old&&old.parentNode) old.parentNode.removeChild(old);
+ var card=document.getElementById('cardNet');
+ if(!card){
+  var anchor=document.getElementById('peopleBox'); if(!anchor) return;
+  var host=anchor.closest?anchor.closest('.card'):null; if(!host||!host.parentNode) return;
+  card=document.createElement('div'); card.className='card'; card.id='cardNet';
+  card.innerHTML='<h2>关系网</h2><div id="netBox"></div>';
+  host.parentNode.insertBefore(card,host);
+  card.addEventListener('click',function(e){
+   var b=e.target.closest('[data-net]'); if(b&&!b.disabled){ var a=b.getAttribute('data-net'), n=b.getAttribute('data-nn'); if(a==='favor') netFavorMenu(n); else netAct(n,a); return; }
+   var q=e.target.closest('[data-np]'); if(q){ netProfile(q.getAttribute('data-np')); return; }
+   var al=e.target.closest('[data-netall]'); if(al){ NET_UI.all=!NET_UI.all; netRender(); }
+  });
+ }
+ var box=document.getElementById('netBox'), html=netCardHTML();
+ if(box&&box.innerHTML!==html) box.innerHTML=html;
+}
+function netFavorMenu(n){
+ var p=netInfoOf(n), body=$('dlgBody');
+ $('dlgTag').textContent='请托 · '+n; $('dlgTitle').textContent='托'+n+'办什么事？';
+ $('dlgDesc').textContent='请托会用掉人情（关系 −4，至交不减），约 '+dayCost('net:favor',DUR_FIX['net:favor'])+' 天。';
+ body.innerHTML='';
+ p.can.forEach(function(c){
+  if(c==='loan'||c==='intro') return;
+  var dis=(c==='promote'&&p.lv<=(s.rank||0));
+  var d={promote:'请他在上头替你说话：一年内晋升门槛 −3。',info:'打听下一件大事的风声。',deal:'介绍一笔生意。',protect:'一年内遇事替你出头（欠债、被拘时可挡一挡）。',skill:'请他指点学问或手艺：能力提升。',heal:'请他看病：健康 +10，付些药钱。'}[c];
+  var b=document.createElement('button'); b.className='choice';
+  b.innerHTML='<b>'+NET_CAN[c]+'</b><div class="sub">'+d+'</div>'+(dis?'<div class="chance" style="color:var(--red)">他的位置不比你高，保举无从谈起</div>':'');
+  if(dis) b.disabled=true; else b.onclick=function(){ netAct(n,'favor',c); };
+  body.appendChild(b);
+ });
+ var x=document.createElement('button'); x.className='btn'; x.textContent='算了'; x.onclick=function(){ $('mask').classList.add('hidden'); }; body.appendChild(x);
+ $('mask').classList.remove('hidden');
+}
+function netProfile(n){
+ var p=netInfoOf(n), r=relGetN(n), body=$('dlgBody');
+ $('dlgTag').textContent='人物档案'; $('dlgTitle').textContent=n+(p.t?' · '+p.t:'');
+ $('dlgDesc').textContent='关系 '+r+'（'+stanceOf(r)+'）· 地位约第 '+(p.lv+1)+' 级 · 能帮你：'+(p.can.map(function(c){return NET_CAN[c];}).join('、')||'—')+(p.owe?' · 你欠他 '+p.owe+' 份人情':'');
+ var mem=(p.mem||[]).map(function(m){ return '<li>'+calFmtOrd(m.o)+'　'+m.t+'</li>'; }).join('');
+ body.innerHTML='<div class="rp"><div class="rp-sec"><b>往来记录</b>'+(mem?'<ul>'+mem+'</ul>':'<p class="small muted">还没有往来。</p>')+'</div></div>';
+ if(p.kind==='hist'){ var st=document.createElement('button'); st.className='choice'; st.setAttribute('data-cd','rel:stand:'+n); st.innerHTML='<b>公开表态</b><div class="sub">当众说出与他不同的主张：声望上升，关系受损。约 '+dayCost('rel:stand',5)+' 天。</div>'; st.onclick=function(){ relAct(n,'stand'); try{ netGrudge(n); }catch(e){} }; body.appendChild(st); }
+ var x=document.createElement('button'); x.className='choice'; x.style.textAlign='center'; x.innerHTML='<b>关闭</b>'; x.onclick=function(){ $('mask').classList.add('hidden'); }; body.appendChild(x);
+ $('mask').classList.remove('hidden');
+}
+window.__netProfile=netProfile; window.__netFavor=netFavorMenu;
+
+/* 历史人物的拜访/请教/共事：结果并入统一结果提示，不再单独弹窗 */
+showResult=function(name,kind,delta,extraText){
+ $('mask').classList.add('hidden');
+ var t=delta>=8?name+'对你颇为受用。':delta>=3?name+'点了点头，表示认可。':delta>=-2?name+'反应平淡。':delta>=-6?name+'面露不悦。':name+'明显被触怒了。';
+ try{ var p=netP(name); if(!p.kind||p.kind==='contact'){ if(histOf(name)) p.kind='hist'; } }catch(e){}
+ log('【'+kind+'】'+t+(extraText?extraText:''));
+ persist(); render();
+};
+
+/* ---------- 6. 生计卡（只放个人生计） ---------- */
+function liveRender(){
+ if(!s) return;
+ var card=document.getElementById('cardLive');
+ if(!card){
+  var act=document.getElementById('actTitle'); var ac=act&&act.closest?act.closest('.card'):null; if(!ac||!ac.parentNode) return;
+  card=document.createElement('div'); card.className='card'; card.id='cardLive';
+  card.innerHTML='<h2>生计账簿</h2><div id="liveBox"></div>';
+  ac.parentNode.insertBefore(card,ac.nextSibling);
+  card.addEventListener('click',function(e){ var b=e.target.closest('[data-repay]'); if(b&&!b.disabled) netRepay(+b.getAttribute('data-repay')); });
+ }
+ var E=econEnsure(s), it=econItems(s), inc=sumItems(it.pay), exp=sumItems(it.cost), n=liveHousehold(s);
+ var fmt=function(a){ return a.map(function(p){ return '<tr><td>'+p[0]+'</td><td class="num">'+M(p[1])+'</td></tr>'; }).join(''); };
+ var h='<div class="live-top"><div><span class="small muted">现银</span><b>'+M(s.cash||0)+'</b></div>'+
+  '<div><span class="small muted">每月进项</span><b class="up">'+M(inc)+'</b></div>'+
+  '<div><span class="small muted">每月开销</span><b class="down">'+M(exp)+'</b></div>'+
+  '<div><span class="small muted">月结余</span><b class="'+(inc-exp>=0?'up':'down')+'">'+(inc-exp<0?'-':'')+M(Math.abs(inc-exp))+'</b></div></div>';
+ h+='<p class="small muted" style="margin:6px 0">职位：'+rankTitleOf()+' · 家口 '+n+' 人 · 居 '+(s.region||'—')+' · 通行 '+curName()+(E.debt>0?' · <span style="color:var(--red)">欠债 '+M(E.debt)+'（月息 3 分）</span>':'')+'</p>';
+ h+='<div class="live-cols"><table class="live-t"><tr><th colspan="2">每月进项（估）</th></tr>'+(fmt(it.pay)||'<tr><td colspan="2" class="muted">无固定进项</td></tr>')+'</table>'+
+  '<table class="live-t"><tr><th colspan="2">每月开销（估）</th></tr>'+fmt(it.cost)+'</table></div>';
+ if(E.loans.length){
+  h+='<div class="small" style="margin-top:6px"><b>借款</b>'+E.loans.map(function(l,i){ return '<div class="live-loan">'+l.from+' · '+M(l.amt)+' · 月息 '+Math.round(l.rate*100)+' 分 · '+calFmtOrd(l.due)+'到期'+(l.late?' <span style="color:var(--red)">已逾期</span>':'')+
+   ' <button class="btn sm" data-repay="'+i+'" data-cd="net:repay:'+l.from+'"'+((s.cash||0)<l.amt?' disabled title="现银不够"':'')+'>还清</button>'+((s.cash||0)<l.amt?'<span class="net-why">现银不够还清</span>':'')+'</div>'; }).join('')+'</div>';
+ }
+ if(E.last) h+='<p class="small muted" style="margin:6px 0 0">上月（'+E.last.y+'年'+E.last.m+'月）实收 '+M(E.last.inc)+'，实支 '+M(E.last.exp)+'。每月 1 日自动结算；入不敷出转为欠债。</p>';
+ else h+='<p class="small muted" style="margin:6px 0 0">每月 1 日自动结算上月收支；入不敷出转为欠债，欠债伤身、伤名，严重时债主上门。</p>';
+ if(s.unit&&isMil()) h+='<p class="small muted" style="margin:2px 0 0">公费（不是私产，可用于招募等）：'+M(s.fund||0)+'</p>';
+ var box=document.getElementById('liveBox'); if(box&&box.innerHTML!==h) box.innerHTML=h;
+}
+
+/* ---------- 7. 军情卡 + 国势参考值 ---------- */
+var REGION_PROV={'直隶':'河北省','江浙':'江苏省','两广':'广东省','湘鄂':'湖北省','四川':'四川省','关外':'辽宁省'};
+function milRender(){
+ if(!s||!world) return;
+ var card=document.getElementById('cardMilInfo');
+ if(!card){
+  var g=document.getElementById('cardUnit'); if(!g||!g.parentNode) return;
+  card=document.createElement('div'); card.className='card'; card.id='cardMilInfo';
+  card.innerHTML='<h2>军情</h2><div id="milInfoBox"></div>';
+  g.parentNode.insertBefore(card,g);
+ }
+ var y=s.year, tot=refAt(REF_ARMY,y)*10000, hi=(s.rank||0)>=4||s.isLeader||isMil();
+ var prov=REGION_PROV[s.region]||'河北省', R=(world.regions||{})[prov]||{ctrl:s.faction,str:45};
+ var gar=garrisonOf(R.ctrl,R.str,y);
+ var h='<p class="small" style="margin:0 0 4px">全国各方常备武装合计约 <b>'+fmtMen(tot)+'</b>（'+y+'年估算）。</p>';
+ h+='<p class="small" style="margin:0 0 4px">'+(s.region||'本地')+'（'+prov.replace(/省|市/,'')+'）驻军'+(hi?'约 <b>'+fmtMen(gar)+'</b>':'，'+'茶馆里说有'+fmtMen(Math.round(gar/10000+0.5)*10000)+'上下（传闻）')+'，属'+(CTRL_NAME[R.ctrl]||R.ctrl)+'。</p>';
+ if(s.unit&&isMil()){
+  var est=UNIT_EST[Math.max(0,Math.min(7,s.rank||0))];
+  h+='<p class="small" style="margin:0 0 4px">你的部伍：实有 '+fmtMen(s.unit.troops)+' / 编制约 '+fmtMen(est)+'。</p>';
+ }
+ if(s.__rebel) h+='<p class="small" style="margin:0 0 4px;color:var(--red)">未平之乱：'+s.__rebel.place+'的'+s.__rebel.n+'，约 '+fmtMen(s.__rebel.arm)+'。</p>';
+ if(s.isLeader||(s.rank||0)>=5){
+  var list=Object.keys(world.regions||{}).map(function(p){ var r=world.regions[p]; return {p:p,n:garrisonOf(r.ctrl,r.str,y),c:r.ctrl}; }).sort(function(a,b){return b.n-a.n;}).slice(0,5);
+  h+='<div class="small muted">重兵所在：'+list.map(function(x){ return x.p.replace(/省|市|自治区|特别行政区|壮族|回族|维吾尔/g,'')+' '+fmtMen(x.n); }).join('，')+'</div>';
+ }else h+='<div class="small muted">再往上的兵力部署，你这个位置看不到。</div>';
+ var box=document.getElementById('milInfoBox'); if(box&&box.innerHTML!==h) box.innerHTML=h;
+}
+function natlExtra(){
+ var box=document.getElementById('natlBox'); if(!box||!s) return;
+ var ex=document.getElementById('natlRef');
+ var y=s.year, E=econEnsure(s);
+ var h='<div class="small" style="margin-top:6px;line-height:1.8">人口约 <b>'+fmtNum(refAt(REF_POP,y),2)+' 亿</b> · 全年财政收入约 <b>'+M(refAt(REF_REV,y)*1e4)+'</b> · 全国常备武装约 <b>'+fmtMen(refAt(REF_ARMY,y)*10000)+'</b>'+
+  (s.isLeader?'<br>国库存银约 <b>'+M(E.state.res*1e4)+'</b>（随财政指数盈亏）':'')+'<br><span class="muted">币制：'+curName()+'；数值为历史估算，见说明。</span></div>';
+ if(!ex){ ex=document.createElement('div'); ex.id='natlRef'; box.appendChild(ex); }
+ if(ex.innerHTML!==h) ex.innerHTML=h;
+ if(ex.parentNode!==box) box.appendChild(ex);
+}
+
+/* ---------- 8. 分页：每页只放自己的内容 ---------- */
+var TAB_TITLE={
+ '晋升之路':'gov','生计账簿':'gov',
+ '关系网':'ppl','历史人物':'ppl','同期人物':'ppl','组织与结社':'ppl','派系':'ppl','人际':'ppl','麾下人才':'ppl',
+ '军情':'mil','兵力 / 粮草':'mil','列强':'mil','国力对比':'mil','战事':'mil','战事图':'mil','内乱':'mil',
+ '时代纪事':'pol','国势':'pol','制度运转':'pol','派系与权力格局':'pol','动态世界局势':'pol','年度报纸':'pol','中国形势图':'pol mil',
+ '身体':'arc','个人编年史':'arc','存档':'arc','结局':'arc'
+};
+window.__tabCat=function(card,title){
+ if(!card) return 'all';
+ var id=card.id||'';
+ if(card.querySelector('#hName')||card.querySelector('#actTitle')||id==='cardLive') return 'gov';
+ if(id==='cardUnit'||id==='cardMilInfo'||card.getAttribute('data-role')==='own') return 'mil';
+ if(id==='cardNet'||card.querySelector('#peopleBox')) return 'ppl';
+ if(card.querySelector('#slotSel')||card.querySelector('#logs')) return 'arc';
+ if(card.querySelector('#chinaMap')) return 'pol mil';
+ if(card.querySelector('#curEvent')) return 'pol';
+ return TAB_TITLE[title]||'all';
+};
+
+/* ---------- 9. 按钮上的预计天数（取代冷却标注） ---------- */
+calDecorate=function(){
+ if(!s) return;
+ NET_ALLY_MEMO=netAllies(70);
+ try{ calDecorateInner(); }finally{ NET_ALLY_MEMO=null; }
+};
+function calDecorateInner(){
+ var els=document.querySelectorAll('[data-cd]');
+ for(var i=0;i<els.length;i++){
+  var el=els[i], key=el.getAttribute('data-cd'), b=actBusy(key), note=el.querySelector('.cdnote');
+  var txt='';
+  if(b){ if(!el.disabled){ el.disabled=true; el.setAttribute('data-cdoff','1'); } txt='进行中 · '+calShort(b.until)+'完成'; el.title=actBusyText(b); }
+  else{
+   if(el.getAttribute('data-cdoff')){ el.disabled=false; el.removeAttribute('data-cdoff'); }
+   var act=el.getAttribute('data-act'), deny=act&&window.__actDeny?window.__actDeny(act):null;
+   if(deny){ txt='不可：'+deny; if(!el.disabled){ el.disabled=true; el.setAttribute('data-denied','1'); } el.title=deny; }
+   else { if(el.getAttribute('data-denied')){ el.disabled=false; el.removeAttribute('data-denied'); } txt=dayHint(key); }
+  }
+  if(txt){ if(!note){ note=document.createElement('span'); note.className='cdnote dur'; el.appendChild(note); } if(note.textContent!==txt) note.textContent=txt; }
+  else if(note) note.parentNode.removeChild(note);
+ }
+}
+calRenderJobs=function(){
+ if(!s) return;
+ var t=document.getElementById('actTitle'); if(!t) return;
+ var card=t.closest?t.closest('.card'):null; if(!card) return;
+ var box=document.getElementById('calJobs');
+ if(!box){ box=document.createElement('div'); box.id='calJobs'; box.className='cal-jobs'; card.appendChild(box); }
+ var today=s.cal.ord, h='';
+ (s.jobs||[]).forEach(function(j){
+  var tot=Math.max(1,j.end-j.start), pct=Math.max(0,Math.min(100,Math.round((today-j.start)/tot*100)));
+  h+='<div class="cal-job"><div class="small"><b>'+j.label+'</b> · 预计 '+calFmtOrd(j.end)+' 完成（还需 '+Math.max(0,j.end-today)+' 天）</div><div class="bar"><i style="width:'+pct+'%"></i></div></div>';
+ });
+ if(!h) h='<div class="small muted">每件事都要花时间：按钮上标着大约天数，确认后日历随即推进。</div>';
+ if(box.innerHTML!==h) box.innerHTML=h;
+};
+ACT_HINT_TEXT='每件事都要花时间：按钮上标着大约天数（随能力、职位、人脉与时局浮动）；确认后日历随即推进，期间每月照常结算生计。';
+/* 原先的“提示”写在存档卡里，别的分页看不见；改为浮动提示 */
+var _flashV4185=flash;
+flash=function(t){ try{ _flashV4185(t); }catch(e){} calToast(t); };
+
+/* ---------- 10. 晋升：关系保举 ---------- */
+FEE=[0,0,10,80,300,800,2000,5000];
+/* ---------- 11. 能力/声望成长：越往上越慢，按实际投入的时间累积 ---------- */
+addExp=function(attr,amount){
+ if(!s||!attr) return;
+ var v=+s[attr]||0, a=+amount||0;
+ if(!s.frac||typeof s.frac!=='object') s.frac={};
+ var g=a>0?a*0.1*Math.max(0.15,1-v/110):a*0.12;
+ var t=(s.frac[attr]||0)+g, whole=t>0?Math.floor(t):Math.ceil(t);
+ s.frac[attr]=t-whole;
+ if(whole) s[attr]=clamp(v+whole);
+};
+
+/* ---------- 12. 开局与旧档迁移 ---------- */
+var START_CASH={'皇室家庭':5000,'乡绅家庭':60,'商人家庭':40,'军人家庭':6,'知识分子家庭':12,'普通家庭':3};
+var START_ROLE={soldier:1,officer:6,official:4,student:2,merchant:25,activist:1};
+var START_TIER={0:0,2:60,5:1500,7:20000};
+function realisticStart(){
+ if(!s) return;
+ var R=Math.max(0,Math.min(7,s.rank||0));
+ var c=(START_CASH[s.origin]||3)+(START_ROLE[s.role]||0)+(START_TIER[R]||0);
+ if(s.isThrone) c=200000; else if(s.isLeader) c=Math.max(c,20000);
+ c*=({'江浙':1.3,'两广':1.2,'关外':1.1,'四川':1.0,'直隶':1.1,'湘鄂':0.9})[s.region]||1;
+ s.cash=_r2(c);
+ s.fund=_r2(FUND_MONTH[R]*3);
+ if(s.unit){ s.unit.troops=isMil()?Math.round(UNIT_EST[R]*rnd(0.75,0.95)):0; }
+ econEnsure(s); netEnsure(s);
+ s.econ.state={res:Math.round(refAt(REF_REV,s.year)*0.25)};
+ delete s.cooldowns;
+}
+function migrate4185(fresh){
+ if(!s) return;
+ calEnsure(s);
+ if(s.cooldowns&&Object.keys(s.cooldowns).length){ s.cooldownsDropped=Object.keys(s.cooldowns).length; }
+ s.cooldowns={};
+ econEnsure(s); netEnsure(s);
+ if(!s.frac) s.frac={};
+ /* 旧档的人际名单（s.met）并入关系网 */
+ (s.met||[]).forEach(function(n){ if(!s.net[n]){ var p=netP(n); p.t='旧识'; p.lv=1; p.can=['info']; } });
+ if(s.unit&&isMil()&&(s.unit.troops||0)<UNIT_EST[Math.max(0,Math.min(7,s.rank||0))]*0.3&&!s.unit.v4185){ s.unit.troops=Math.round(UNIT_EST[Math.max(0,Math.min(7,s.rank||0))]*0.8); }
+ if(s.unit) s.unit.v4185=1;
+ s.v4185=1;
+}
+var _initV4185=init;
+init=function(){
+ _initV4185.apply(null,arguments);
+ if(!s) return;
+ realisticStart(); migrate4185(true);
+ try{ s.cal.yearSnap=calSnap(); }catch(e){}   /* 年度报告的“年初”以写实的起始现银为准 */
+ SP.req=null; SP.cur=null; SP.pre=null; SP.popup=null;
+ try{ if(window.__RENDER) window.__RENDER(); }catch(e){}
+};
+var _applySaveV4185=applySave;
+applySave=function(d){
+ SP.req=null; SP.cur=null; SP.pre=null; SP.popup=null;
+ var r=_applySaveV4185.apply(this,arguments);
+ if(s){ migrate4185(false); try{ if(window.__RENDER) window.__RENDER(); }catch(e){} }
+ return r;
+};
+var _packV4185=packSave;
+packSave=function(){ var o=_packV4185.apply(null,arguments); o.v='4.18.5'; return o; };
+
+/* ---------- 13. 渲染接线 ---------- */
+var _renderV4185=render;
+render=function(){
+ _renderV4185.apply(null,arguments);
+ if(!s) return;
+ try{ econEnsure(s); netEnsure(s); }catch(e){}
+ try{ liveRender(); }catch(e){ if(window.console) console.error(e); }
+ try{ netRender(); }catch(e){ if(window.console) console.error(e); }
+ try{ milRender(); }catch(e){ if(window.console) console.error(e); }
+ try{ natlExtra(); }catch(e){}
+ try{ var cr=document.getElementById('cardRel'); if(cr) cr.style.display='none'; }catch(e){}   /* 旧“人际”卡并入关系网 */
+ try{
+  var hc=document.getElementById('hudCash'); if(hc){ var t=M(s.cash||0)+((s.econ&&s.econ.debt>0)?' · 欠 '+M(s.econ.debt):''); if(hc.textContent!==t) hc.textContent=t; }
+  var tc=document.getElementById('tCash'); if(tc){ tc.textContent='现银 '+M(s.cash||0); tc.className=(s.econ&&s.econ.debt>0)?'tag warn':'tag'; }
+  var tf=document.getElementById('tFund'); if(tf) tf.textContent='公费 '+M(s.fund||0);
+  var ta=document.getElementById('tAp'); if(ta) ta.textContent=(s.jobs&&s.jobs.length)?('在建工程 '+s.jobs.length+' 项'):'按天计时';
+ }catch(e){}
+ try{ calDecorate(); calRenderJobs(); }catch(e){}
+};
+window.__V4185={sp:SP,snap:spSnap,mark:spMark,begin:spBegin,run:spRun,tick:spTick,instant:spInstant,econMonth:econMonth,netNames:netNames,netAct:netAct,netWhy:netWhy,
+ dayCost:dayCost,dayHint:dayHint,patron:netPatronBonus,shield:netShield,M:M,curOf:curOf,garrisonOf:garrisonOf,refAt:refAt,REF:{pop:REF_POP,rev:REF_REV,army:REF_ARMY},
+ pay:livePayItems,cost:liveCostItems,household:liveHousehold,netNew:netNew,netRender:netRender,liveRender:liveRender};
+/* 测试与外部调用：先 mark（记下点击前状态），再执行行动，再 flush（开始推进） */
+/* window.__CAL 在 V4.17 段落里按旧函数取值，这里换成 V4.18.5 的版本 */
+window.__CAL.loop=calLoop; window.__CAL.busy=actBusy; window.__CAL.gate=actGate; window.__CAL.cool=actCool; window.__actBusy=actBusy;
+window.__CAL.mark=spMark;
+window.__CAL.flushSpend=function(){ if(SP.req&&!SP.cur) spBegin(); else if(SP.cur) spRun(); return !SP.cur; };
+window.__CAL.spending=function(){ return SP.cur?{label:SP.cur.label,from:SP.cur.from,to:SP.cur.to,n:SP.cur.n}:null; };
+
+window.__V4185NET=1;
 })(); /* 主作用域结束 */

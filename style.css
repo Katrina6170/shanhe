@@ -357,3 +357,36 @@ button[data-cdoff]{opacity:.72;cursor:not-allowed}
  #hud .hud-m span:nth-child(3){display:inline-flex}
  #hud .hud-m span:nth-child(2){display:none}
 }
+
+/* ===== V4.18.5：分页、结果提示、生计账簿、关系网（只加功能所需的最少样式，视觉改版留待下一轮） ===== */
+.tabhide{display:none!important}
+.cdnote.dur{color:#6b6255}
+.rp .rp-head{margin:0 0 8px;font-size:13.5px;font-weight:600;line-height:1.6}
+.rp .rp-sec{margin:0 0 8px}
+.rp .rp-sec>b{display:block;font-size:12px;color:#5f574a;margin-bottom:2px}
+.rp ul{margin:0;padding-left:18px;font-size:12.5px;line-height:1.75}
+.live-top{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+.live-top>div{border:1px solid var(--line);padding:6px 8px;background:#fff}
+.live-top b{display:block;font-size:14px}
+.live-top .up,.live-t .up{color:var(--green)}.live-top .down{color:var(--red)}
+.live-cols{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.live-t{width:100%;border-collapse:collapse;font-size:12px}
+.live-t th{text-align:left;font-weight:600;color:#5f574a;border-bottom:1px solid var(--line);padding:3px 0}
+.live-t td{padding:2px 0;border-bottom:1px dashed #ebe5d8}
+.live-t td.num{text-align:right;white-space:nowrap}
+.live-loan{margin:4px 0}
+.net-row{border-top:1px solid var(--line);padding:7px 0}
+.net-top{display:flex;gap:8px;align-items:baseline;flex-wrap:wrap}
+.net-name{cursor:pointer;text-decoration:underline dotted}
+.net-st{margin-left:auto;font-size:12px}
+.net-st.shi{color:var(--green)}.net-st.slo{color:var(--red)}.net-st.smid{color:#6b6255}
+.net-row .bar{margin:3px 0}
+.net-can{display:inline-block;border:1px solid var(--line);padding:0 5px;margin-right:3px;font-size:11px}
+.net-why{font-size:11px;color:#8c2b22;margin-top:2px}
+@media(max-width:760px){
+ .live-top{grid-template-columns:1fr 1fr}
+ .live-cols{grid-template-columns:1fr}
+ #tabs button{padding:7px 9px;font-size:13px}
+}
+#cardNet .pbtns,#liveBox .live-loan{display:flex;flex-wrap:wrap;gap:4px}
+#cardNet .pbtns .btn,#liveBox .btn{flex:0 0 auto;white-space:nowrap}

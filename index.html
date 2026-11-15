@@ -3,10 +3,10 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>山河：1840—1972 · V4.18.0</title>
+<title>山河：1840—1972 · V4.18.5</title>
 <meta name="description" content="山河：1840—1972，中国近代史人生模拟。">
 <meta name="theme-color" content="#a23a2c">
-<link rel="stylesheet" href="style.css?v=4180">
+<link rel="stylesheet" href="style.css?v=4185">
 </head>
 <body>
 <div id="hud">
@@ -25,7 +25,7 @@
     <span><i>年龄</i><b id="hudAge">—</b></span>
     <span><i>阵营</i><b id="hudFac">—</b></span>
     <span><i>银钱</i><b id="hudCash">—</b></span>
-    <span><i>进行中</i><b id="hudJobs">—</b></span>
+    <span><i>在建</i><b id="hudJobs">—</b></span>
   </div>
   <div class="hud-r"><b id="hudPlace">—</b></div>
 </div>
@@ -33,6 +33,7 @@
   <button data-tab="gov" class="on">朝政</button>
   <button data-tab="ppl">人物</button>
   <button data-tab="mil">军政</button>
+  <button data-tab="pol">时局</button>
   <button data-tab="arc">档案</button>
   <button data-tab="all">全览</button>
 </nav>
@@ -43,7 +44,7 @@
     <h1>山河</h1>
     <p>1840—1972 · 中国近代史人生模拟</p>
   </div>
-  <div class="stamp">V4.18.0 · 实时日历与行动冷却</div>
+  <div class="stamp">V4.18.5 · 按天计时与真实生计</div>
 </header>
 
 <section id="setup">
@@ -134,19 +135,19 @@
         <div style="display:flex;justify-content:space-between;align-items:center">
           <h2 style="margin:0" id="actTitle">行动</h2><span class="tag" id="tAp"></span>
         </div>
-        <p class="small muted" style="margin:5px 0 8px"><span id="actHint">每项事务独立冷却，按游戏日计算；持续行动到期自动结算。暂停时冷却与行动一并停止。</span></p>
+        <p class="small muted" style="margin:5px 0 8px"><span id="actHint">每件事都要花时间：按钮上标着大约天数；确认后日历随即推进。</span></p>
         <div class="acts">
-          <button class="act" data-act="train"><b>⚔ 操练</b><span>需军职</span></button>
-          <button class="act" data-act="study"><b>📚 进修</b><span>积累能力</span></button>
-          <button class="act" data-act="politics"><b>🏛 活动</b><span>需职位/盟友</span></button>
-          <button class="act" data-act="govern"><b>📜 办事</b><span>需文官/地方</span></button>
-          <button class="act" data-act="network"><b>🤝 人脉</b><span>结识一人</span></button>
+          <button class="act" data-act="train"><b>操练</b><span>需军职</span></button>
+          <button class="act" data-act="study"><b>进修</b><span>积累能力</span></button>
+          <button class="act" data-act="politics"><b>活动</b><span>需职位/盟友</span></button>
+          <button class="act" data-act="govern"><b>办事</b><span>需文官/地方</span></button>
+          <button class="act" data-act="network"><b>人脉</b><span>结识一人</span></button>
         </div>
         <div class="acts" style="margin-top:6px">
-          <button class="act" data-act="earn"><b>💼 谋生</b><span>赚银钱</span></button>
-          <button class="act" data-act="gift"><b>🎁 打点</b><span>40 两 · 换信任</span></button>
-          <button class="act" data-act="buy"><b>🔫 添置</b><span>110 两 · 涨声望</span></button>
-          <button class="act" data-act="fund"><b>🏦 输捐</b><span>50 两入公费</span></button>
+          <button class="act" data-act="earn"><b>谋生</b><span>赚银钱</span></button>
+          <button class="act" data-act="gift"><b>打点</b><span>送礼换信任</span></button>
+          <button class="act" data-act="buy"><b>添置</b><span>添置枪械</span></button>
+          <button class="act" data-act="fund"><b>输捐</b><span>捐入公费</span></button>
         </div>
       </div>
 
@@ -293,9 +294,9 @@ window.addEventListener('error',function(e){
 });
 window.addEventListener('unhandledrejection',function(e){ __showErr('promise: '+(e.reason&&e.reason.message||e.reason)); });
 </script>
-<script src="china.js?v=4180"></script>
-<script src="world.js?v=4180"></script>
-<script src="app.js?v=4180" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
+<script src="china.js?v=4185"></script>
+<script src="world.js?v=4185"></script>
+<script src="app.js?v=4185" onerror="(function(){var b=document.createElement('div');b.style.cssText='position:fixed;left:0;right:0;bottom:0;z-index:130;background:#7a2b1e;color:#fff;padding:10px;font-size:13px';b.textContent='游戏主脚本加载失败，请检查网络后刷新页面。';document.body.appendChild(b)})()"></script>
 <div id="tipFloat"></div>
 </body>
 </html>
